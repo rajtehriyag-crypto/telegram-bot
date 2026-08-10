@@ -12,4 +12,8 @@ def start(message):
 def ping(message):
     bot.reply_to(message, "Pong 🏓")
 
+@bot.message_handler(commands=['id'])
+def get_id(message):
+    bot.reply_to(message, f"👤 User ID: {message.from_user.id}\n💬 Chat ID: {message.chat.id}")
+
 bot.infinity_polling()
