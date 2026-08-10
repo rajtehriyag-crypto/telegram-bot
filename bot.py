@@ -62,5 +62,68 @@ def help_cmd(message):
 @bot.message_handler(commands=['report'])
 def report(message):
     bot.reply_to(message, "📢 Report received.")
+    from telebot import types
+
+@bot.message_handler(commands=['kick'])
+def kick_user(message):
+    if message.reply_to_message:
+        bot.kick_chat_member(message.chat.id, message.reply_to_message.from_user.id)
+        bot.reply_to(message, "👢 User kicked.")
+
+@bot.message_handler(commands=['ban'])
+def ban_user(message):
+    if message.reply_to_message:
+        bot.ban_chat_member(message.chat.id, message.reply_to_message.from_user.id)
+        bot.reply_to(message, "🔨 User banned.")
+
+@bot.message_handler(commands=['unban'])
+def unban_user(message):
+    bot.reply_to(message, "ℹ️ Unban command setup later with user ID support.")
+
+@bot.message_handler(commands=['mute'])
+def mute_user(message):
+    if message.reply_to_message:
+        permissions = types.ChatPermissions(can_send_messages=False)
+        bot.restrict_chat_member(
+            message.chat.id,
+            message.reply_to_message.from_user.id,
+            permissions
+        )
+        bot.reply_to(message, "🔇 User muted.")
+
+@bot.message_handler(commands=['unmute'])
+def unmute_user(message):
+    if message.reply_to_message:
+        permissions = types.ChatPermissions(
+            can_send_messages=True,
+            can_send_media_messages=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True
+        )
+        bot.restrict_chat_member(
+            message.chat.id,
+            message.reply_to_message.from_user.id,
+            permissions
+        )
+        bot.reply_to(message, "🔊 User unmuted.")
+
+@bot.message_handler(commands=['delete'])
+def delete_msg(message):
+    if message.reply_to_message:
+        bot.delete_message(message.chat.id, message.reply_to_message.message_id)
+
+@bot.message_handler(commands=['pin'])
+def pin_msg(message):
+    if message.reply_to_message:
+        bot.pin_chat_message(
+            message.chat.id,
+            message.reply_to_message.message_id
+        )
+        bot.reply_to(message, "📌 Message pinned.")
+
+@bot.message_handler(commands=['unpin'])
+def unpin_msg(message):
+    bot.unpin_all_chat_messages(message.chat.id)
+    bot.reply_to(message, "📍 Messages unpinned.")
     
 bot.infinity_polling()
