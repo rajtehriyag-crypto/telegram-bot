@@ -1247,8 +1247,4 @@ def count_messages(message):
 print("🤖 Bot Starting...")
 print("🚀 Bot is Online!")
 
-bot.infinity_polling(
-    skip_pending=True,
-    timeout=60,
-
 bot.infinity_polling()
