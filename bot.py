@@ -418,4 +418,370 @@ Permissions Restored
     except Exception as e:
         bot.reply_to(message, f"❌ {e}")
 
+# ==========================================
+# REALMX VIP MODERATION — PART 1A (NEXT)
+# WARN / UNWARN / PURGE / PIN / UNPIN
+# ==========================================
+
+
+# ==========================================
+# /WARN
+# 3 WARNINGS = AUTO BAN
+# ==========================================
+
+@bot.message_handler(commands=['warn'])
+def warn_user(message):
+
+    if not is_admin(message.chat.id, message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(
+            message,
+            "⚠️ Reply to a member's message and use /warn"
+        )
+        return
+
+    target = message.reply_to_message.from_user
+
+    # Bot ya admin ko warn na kare
+    if target.is_bot:
+        bot.reply_to(message, "❌ Bots cannot be warned.")
+        return
+
+    if is_admin(message.chat.id, target.id):
+        bot.reply_to(message, "❌ You cannot warn a group administrator.")
+        return
+
+    key = (message.chat.id, target.id)
+
+    warnings_db[key] = warnings_db.get(key, 0) + 1
+    count = warnings_db[key]
+
+    # 3 warnings = automatic ban
+    if count >= 3:
+
+        try:
+            bot.ban_chat_member(
+                message.chat.id,
+                target.id
+            )
+
+            warnings_db[key] = 0
+
+            bot.send_message(
+                message.chat.id,
+                f"""
+╔══════════════════════╗
+║ 🚨 REALMX SECURITY 🚨 ║
+╚══════════════════════╝
+
+🔨 ACTION
+Automatic Ban
+
+👤 USER
+{target.first_name}
+
+🆔 USER ID
+{target.id}
+
+⚠️ WARNINGS
+3 / 3
+
+🛡️ MODERATOR
+{message.from_user.first_name}
+
+🚫 STATUS
+3 Warnings Reached
+User Permanently Banned
+""",
+                reply_markup=vip_panel()
+            )
+
+        except Exception as e:
+            bot.reply_to(message, f"❌ {e}")
+
+        return
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+╔══════════════════════╗
+║ ⚠️ REALMX WARNING ⚠️ ║
+╚══════════════════════╝
+
+👤 USER
+{target.first_name}
+
+🆔 USER ID
+{target.id}
+
+⚠️ WARNING
+{count} / 3
+
+🛡️ ISSUED BY
+{message.from_user.first_name}
+
+📌 NOTICE
+3 Warnings = Automatic Ban
+""",
+        reply_markup=vip_panel()
+    )
+
+
+# ==========================================
+# /UNWARN
+# ==========================================
+
+@bot.message_handler(commands=['unwarn'])
+def unwarn_user(message):
+
+    if not is_admin(message.chat.id, message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(
+            message,
+            "🟢 Reply to the member's message and use /unwarn"
+        )
+        return
+
+    target = message.reply_to_message.from_user
+    key = (message.chat.id, target.id)
+
+    current = warnings_db.get(key, 0)
+
+    if current <= 0:
+        bot.reply_to(
+            message,
+            f"ℹ️ {target.first_name} has no active warnings."
+        )
+        return
+
+    warnings_db[key] = current - 1
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+╔══════════════════════╗
+║ 🟢 REALMX WARNING 🟢 ║
+╚══════════════════════╝
+
+👤 USER
+{target.first_name}
+
+🆔 USER ID
+{target.id}
+
+➖ WARNING REMOVED
+
+⚠️ CURRENT WARNINGS
+{warnings_db[key]} / 3
+
+🛡️ MODERATOR
+{message.from_user.first_name}
+
+✅ STATUS
+Warning Record Updated
+""",
+        reply_markup=vip_panel()
+    )
+
+
+# ==========================================
+# /PURGE
+# Usage: /purge 20
+# Reply to a message and use /purge 20
+# Maximum: 100 messages
+# ==========================================
+
+@bot.message_handler(commands=['purge'])
+def purge_messages(message):
+
+    if not is_admin(message.chat.id, message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(
+            message,
+            "🧹 Reply to the first message and use:\n/purge 20"
+        )
+        return
+
+    try:
+
+        parts = message.text.split()
+
+        if len(parts) < 2:
+            count = 10
+        else:
+            count = int(parts[1])
+
+        if count < 1:
+            bot.reply_to(
+                message,
+                "❌ Count must be at least 1."
+            )
+            return
+
+        if count > 100:
+            count = 100
+
+        start_id = message.reply_to_message.message_id
+
+        deleted = 0
+
+        for msg_id in range(start_id, start_id + count):
+
+            try:
+                bot.delete_message(
+                    message.chat.id,
+                    msg_id
+                )
+                deleted += 1
+            except:
+                pass
+
+        # Command message bhi delete karne ki koshish
+        try:
+            bot.delete_message(
+                message.chat.id,
+                message.message_id
+            )
+        except:
+            pass
+
+        bot.send_message(
+            message.chat.id,
+            f"""
+╔══════════════════════╗
+║ 🧹 REALMX CLEANUP 🧹 ║
+╚══════════════════════╝
+
+🗑️ MESSAGES REMOVED
+{deleted}
+
+🛡️ MODERATOR
+{message.from_user.first_name}
+
+⚡ STATUS
+Chat Successfully Cleaned
+""",
+            reply_markup=vip_panel()
+        )
+
+    except ValueError:
+        bot.reply_to(
+            message,
+            "❌ Invalid number.\nExample: /purge 20"
+        )
+
+    except Exception as e:
+        bot.reply_to(
+            message,
+            f"❌ Purge Error: {e}"
+        )
+
+
+# ==========================================
+# /PIN
+# ==========================================
+
+@bot.message_handler(commands=['pin'])
+def pin_message(message):
+
+    if not is_admin(message.chat.id, message.from_user.id):
+        return
+
+    if not message.reply_to_message:
+        bot.reply_to(
+            message,
+            "📌 Reply to a message and use /pin"
+        )
+        return
+
+    try:
+
+        bot.pin_chat_message(
+            message.chat.id,
+            message.reply_to_message.message_id,
+            disable_notification=False
+        )
+
+        bot.send_message(
+            message.chat.id,
+            f"""
+╔══════════════════════╗
+║ 📌 REALMX NOTICE 📌 ║
+╚══════════════════════╝
+
+📍 MESSAGE
+Pinned Successfully
+
+🛡️ PINNED BY
+{message.from_user.first_name}
+
+⚡ STATUS
+Important Message Secured
+""",
+            reply_markup=vip_panel()
+        )
+
+    except Exception as e:
+        bot.reply_to(
+            message,
+            f"❌ Pin Error: {e}"
+        )
+
+
+# ==========================================
+# /UNPIN
+# ==========================================
+
+@bot.message_handler(commands=['unpin'])
+def unpin_message(message):
+
+    if not is_admin(message.chat.id, message.from_user.id):
+        return
+
+    try:
+
+        if message.reply_to_message:
+
+            bot.unpin_chat_message(
+                message.chat.id,
+                message.reply_to_message.message_id
+            )
+
+        else:
+
+            bot.unpin_all_chat_messages(
+                message.chat.id
+            )
+
+        bot.send_message(
+            message.chat.id,
+            f"""
+╔══════════════════════╗
+║ 📍 REALMX NOTICE 📍 ║
+╚══════════════════════╝
+
+📌 ACTION
+Pinned Message Removed
+
+🛡️ MODERATOR
+{message.from_user.first_name}
+
+✅ STATUS
+Successfully Unpinned
+""",
+            reply_markup=vip_panel()
+        )
+
+    except Exception as e:
+        bot.reply_to(
+            message,
+            f"❌ Unpin Error: {e}"
+        )
+
 bot.infinity_polling()
