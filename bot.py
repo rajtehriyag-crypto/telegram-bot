@@ -1,8 +1,8 @@
 """
 REALMX HELPER - Telegram group management bot
 
-Run locally:
-    pip install -r requirements.txt
+Run locally (Linux / macOS / Railway / Replit Terminal):
+    pip install python-telegram-bot
     BOT_TOKEN="8980536868:AAHjaPCAcer6TCfbfpMqdcTTp_CFvhnNu7w" OWNER_ID="8727799160" python bot.py
 """
 
@@ -1777,5 +1777,4 @@ def main() -> None:
         drop_pending_updates=True,
     )
 
-if __name__ == "__main__":
-    main()
+bot.infinity_polling()
