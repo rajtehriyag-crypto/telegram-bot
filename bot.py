@@ -784,4 +784,340 @@ Successfully Unpinned
             f"❌ Unpin Error: {e}"
         )
 
+# ==========================================
+# REALMX VIP STAFF MANAGEMENT — PART 1B
+# ==========================================
+
+# Staff ranks are stored in memory.
+# Bot restart hone par ranks reset ho jayenge.
+
+staff_ranks = {}
+
+
+def get_staff_rank(chat_id, user_id):
+    return staff_ranks.get((chat_id, user_id))
+
+
+def set_staff_rank(chat_id, user_id, rank):
+    staff_ranks[(chat_id, user_id)] = rank
+
+
+def remove_staff_rank(chat_id, user_id):
+    staff_ranks.pop((chat_id, user_id), None)
+
+
+def staff_target(message):
+    if not message.reply_to_message:
+        bot.reply_to(
+            message,
+            "❌ Kisi member ke message ko reply karke command use karo."
+        )
+        return None
+
+    return message.reply_to_message.from_user
+
+
+def can_manage_staff(message):
+    return is_admin(message.chat.id, message.from_user.id)
+
+
+# ==========================================
+# /PROMOTE1
+# REALM KEEPER
+# ==========================================
+
+@bot.message_handler(commands=['promote1'])
+def promote1(message):
+
+    if not can_manage_staff(message):
+        return
+
+    target = staff_target(message)
+
+    if not target:
+        return
+
+    if target.is_bot:
+        bot.reply_to(message, "❌ Bot ko staff rank nahi diya ja sakta.")
+        return
+
+    if target.id == message.from_user.id:
+        bot.reply_to(message, "❌ Khud ko promote nahi kar sakte.")
+        return
+
+    if is_admin(message.chat.id, target.id):
+        bot.reply_to(
+            message,
+            "❌ Telegram Administrator ko custom staff rank nahi diya ja sakta."
+        )
+        return
+
+    set_staff_rank(
+        message.chat.id,
+        target.id,
+        "Realm Keeper"
+    )
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+╔══════════════════════════╗
+║ 🥉 REALMX STAFF SYSTEM 🥉 ║
+╚══════════════════════════╝
+
+👤 MEMBER
+{target.first_name}
+
+🎖️ NEW RANK
+Realm Keeper
+
+🛡️ PERMISSIONS
+• Warn
+• Delete
+
+👑 APPOINTED BY
+{message.from_user.first_name}
+
+✅ STATUS
+Staff Rank Activated
+""",
+        reply_markup=vip_panel()
+    )
+
+
+# ==========================================
+# /PROMOTE2
+# REALM GUARDIAN
+# ==========================================
+
+@bot.message_handler(commands=['promote2'])
+def promote2(message):
+
+    if not can_manage_staff(message):
+        return
+
+    target = staff_target(message)
+
+    if not target:
+        return
+
+    if target.is_bot:
+        bot.reply_to(message, "❌ Bot ko staff rank nahi diya ja sakta.")
+        return
+
+    if target.id == message.from_user.id:
+        bot.reply_to(message, "❌ Khud ko promote nahi kar sakte.")
+        return
+
+    if is_admin(message.chat.id, target.id):
+        bot.reply_to(
+            message,
+            "❌ Telegram Administrator ko custom staff rank nahi diya ja sakta."
+        )
+        return
+
+    set_staff_rank(
+        message.chat.id,
+        target.id,
+        "Realm Guardian"
+    )
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+╔══════════════════════════╗
+║ 🥈 REALMX STAFF SYSTEM 🥈 ║
+╚══════════════════════════╝
+
+👤 MEMBER
+{target.first_name}
+
+🎖️ NEW RANK
+Realm Guardian
+
+🛡️ PERMISSIONS
+• Warn
+• Delete
+• Mute
+• Pin
+
+👑 APPOINTED BY
+{message.from_user.first_name}
+
+✅ STATUS
+Staff Rank Activated
+""",
+        reply_markup=vip_panel()
+    )
+
+
+# ==========================================
+# /PROMOTE3
+# REALM COMMANDER
+# ==========================================
+
+@bot.message_handler(commands=['promote3'])
+def promote3(message):
+
+    if not can_manage_staff(message):
+        return
+
+    target = staff_target(message)
+
+    if not target:
+        return
+
+    if target.is_bot:
+        bot.reply_to(message, "❌ Bot ko staff rank nahi diya ja sakta.")
+        return
+
+    if target.id == message.from_user.id:
+        bot.reply_to(message, "❌ Khud ko promote nahi kar sakte.")
+        return
+
+    if is_admin(message.chat.id, target.id):
+        bot.reply_to(
+            message,
+            "❌ Ye user already Telegram Administrator hai."
+        )
+        return
+
+    try:
+        bot.promote_chat_member(
+            message.chat.id,
+            target.id,
+            can_manage_chat=True,
+            can_delete_messages=True,
+            can_restrict_members=True,
+            can_pin_messages=True,
+            can_invite_users=True,
+            can_change_info=False,
+            can_promote_members=False
+        )
+
+        set_staff_rank(
+            message.chat.id,
+            target.id,
+            "Realm Commander"
+        )
+
+        bot.send_message(
+            message.chat.id,
+            f"""
+╔════════════════════════════╗
+║ 🥇 REALMX COMMANDER 🥇 ║
+╚════════════════════════════╝
+
+👤 MEMBER
+{target.first_name}
+
+🎖️ RANK
+Realm Commander
+
+🛡️ ACCESS
+Full Moderation Admin
+
+⚔️ PERMISSIONS
+• Manage Chat
+• Delete Messages
+• Ban / Restrict
+• Pin Messages
+• Invite Users
+
+👑 APPOINTED BY
+{message.from_user.first_name}
+
+✅ STATUS
+Commander Activated
+""",
+            reply_markup=vip_panel()
+        )
+
+    except Exception as e:
+        bot.reply_to(
+            message,
+            f"❌ Telegram Admin Promotion Failed:\n{e}"
+        )
+
+
+# ==========================================
+# /DEMOTE
+# ==========================================
+
+@bot.message_handler(commands=['demote'])
+def demote(message):
+
+    if not can_manage_staff(message):
+        return
+
+    target = staff_target(message)
+
+    if not target:
+        return
+
+    # Custom staff rank remove
+    old_rank = get_staff_rank(
+        message.chat.id,
+        target.id
+    )
+
+    if old_rank:
+        remove_staff_rank(
+            message.chat.id,
+            target.id
+        )
+
+    # Agar Telegram admin hai to demote bhi karo
+    try:
+
+        member = bot.get_chat_member(
+            message.chat.id,
+            target.id
+        )
+
+        if member.status == "administrator":
+
+            # Bot sirf apne diye hue admin ko demote kar sakta hai,
+            # aur bot ke paas can_promote_members permission honi chahiye.
+            bot.promote_chat_member(
+                message.chat.id,
+                target.id,
+                can_manage_chat=False,
+                can_delete_messages=False,
+                can_manage_video_chats=False,
+                can_restrict_members=False,
+                can_promote_members=False,
+                can_change_info=False,
+                can_invite_users=False,
+                can_pin_messages=False
+            )
+
+    except:
+        pass
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+╔══════════════════════════╗
+║ ⬇️ REALMX STAFF SYSTEM ⬇️ ║
+╚══════════════════════════╝
+
+👤 MEMBER
+{target.first_name}
+
+🎖️ PREVIOUS RANK
+{old_rank or "No Custom Rank"}
+
+❌ STATUS
+Staff Access Removed
+
+🛡️ ACTION BY
+{message.from_user.first_name}
+
+✅ REALMX STAFF SYSTEM
+Updated Successfully
+""",
+        reply_markup=vip_panel()
+            )
+
 bot.infinity_polling()
