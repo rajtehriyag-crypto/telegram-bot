@@ -1777,4 +1777,6 @@ def main() -> None:
         drop_pending_updates=True,
     )
 
-bot.infinity_polling()
+if __name__ == "__main__":
+    main()
+
