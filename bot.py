@@ -139,21 +139,224 @@ Welcome to RealmX Network.
 # =========================
 # HELP
 # =========================
-
 @bot.message_handler(commands=['help'])
 def help_cmd(message):
 
-    text = """
-🌌 <b>REALMX COMMANDS</b>
+    markup = types.InlineKeyboardMarkup(row_width=2)
 
-🛠️ General
-/start
-/help
+    markup.add(
+        types.InlineKeyboardButton("📢 Support Channel", url=SUPPORT_CHANNEL),
+        types.InlineKeyboardButton("💬 Support Group", url=SUPPORT_GROUP)
+    )
 
-More commands coming soon...
+    markup.add(
+        types.InlineKeyboardButton("👑 Owner", url="https://t.me/internationalpanditG")
+    )
+
+    help_text = """
+╔════════════════════════════╗
+║ 🌌 REALMX HELPER COMMANDS ║
+╚════════════════════════════╝
+
+🛠️ GENERAL & UTILITY
+
+🚀 /start
+➜ VIP welcome panel open karta hai.
+
+📚 /help
+➜ Saari commands aur unka work dikhata hai.
+
+🏓 /ping
+➜ Bot online hai ya nahi check karta hai.
+
+🆔 /id
+➜ User ID aur Group ID dikhata hai.
+
+👤 /info
+➜ User profile information dikhata hai.
+
+🚨 /report
+➜ Reply ki hui message ko admins tak report karta hai.
+
+🌙 /afk [reason]
+➜ AFK status set karta hai.
+
+⏳ /uptime
+➜ Bot kitne time se online hai dikhata hai.
+
+━━━━━━━━━━━━━━━━━━
+
+🛡️ MODERATION
+
+🔨 /ban
+➜ User ko permanently ban karta hai.
+
+✅ /unban
+➜ Banned user ko restore karta hai.
+
+👢 /kick
+➜ User ko group se remove karta hai.
+
+🔇 /mute [minutes]
+➜ User ko temporary mute karta hai.
+
+🔊 /unmute
+➜ User ko unmute karta hai.
+
+⚠️ /warn
+➜ Warning deta hai.
+
+🟢 /unwarn
+➜ Warning remove karta hai.
+
+🧹 /purge
+➜ Bulk messages delete karta hai.
+
+📌 /pin
+➜ Important message pin karta hai.
+
+📍 /unpin
+➜ Pinned message remove karta hai.
+
+━━━━━━━━━━━━━━━━━━
+
+👑 STAFF MANAGEMENT
+
+🥉 /promote1
+➜ Realm Keeper rank deta hai.
+
+🥈 /promote2
+➜ Realm Guardian rank deta hai.
+
+🥇 /promote3
+➜ Realm Commander rank deta hai.
+
+⬇️ /demote
+➜ Staff rank remove karta hai.
+
+━━━━━━━━━━━━━━━━━━
+
+⚙️ AUTOMOD
+
+🚫 /antispam
+➜ Spam protection ON/OFF.
+
+🛡️ /antiflood
+➜ Flood protection ON/OFF.
+
+👋 /welcome
+➜ Welcome system manage karta hai.
+
+🚪 /goodbye
+➜ Goodbye messages manage karta hai.
+
+✍️ /setwelcome
+➜ Custom welcome set karta hai.
+
+📜 /setrules
+➜ Group rules save karta hai.
+
+📖 /rules
+➜ Saved rules dikhata hai.
+
+⚙️ /filter
+➜ Auto reply create karta hai.
+
+❌ /stopfilter
+➜ Auto reply remove karta hai.
+
+📝 /blocklist
+➜ Blocked words manage karta hai.
+
+━━━━━━━━━━━━━━━━━━
+
+📊 ANALYTICS
+
+🌟 /profile
+➜ VIP profile card dikhata hai.
+
+🎖️ /rank
+➜ XP aur level progress dikhata hai.
+
+📈 /mystats
+➜ Personal activity report dikhata hai.
+
+🏆 /leaderboard
+➜ Top users list dikhata hai.
+
+📊 /activity
+➜ Aaj ki activity dikhata hai.
+
+📅 /weekly
+➜ Weekly stats dikhata hai.
+
+👑 /topusers
+➜ Most active users dikhata hai.
+
+━━━━━━━━━━━━━━━━━━
+
+🎮 FUN & GAMES
+
+🎲 /dice
+➜ Dice roll karta hai.
+
+🪙 /coin
+➜ Coin toss karta hai.
+
+✊ /rps
+➜ Rock Paper Scissors game.
+
+🔢 /guess
+➜ Number guessing game.
+
+❓ /quiz
+➜ Quiz question deta hai.
+
+😇 /truth
+➜ Random truth question.
+
+🔥 /dare
+➜ Random dare challenge.
+
+🎱 /8ball
+➜ Magic 8 Ball answer.
+
+⭕ /tictac
+➜ Tic Tac Toe game.
+
+━━━━━━━━━━━━━━━━━━
+
+🔒 OWNER PANEL
+
+👑 /panel
+➜ Owner control panel.
+
+📊 /stats
+➜ Global bot statistics.
+
+📢 /broadcast
+➜ All users ko message.
+
+🌍 /gcast
+➜ All groups me message.
+
+💾 /backup
+➜ Database backup.
+
+♻️ /restart
+➜ Bot restart.
+
+━━━━━━━━━━━━━━━━━━
+
+🌌 REALMX HELPER
+👑 Owner: @internationalpanditG
 """
 
-    bot.send_message(message.chat.id, text)
+    bot.send_message(
+        message.chat.id,
+        help_text,
+        reply_markup=markup
+    )
 
 # =========================
 # TRACK USERS
