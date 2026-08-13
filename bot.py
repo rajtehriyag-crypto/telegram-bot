@@ -173,4 +173,184 @@ def tracker(message):
 
 print("🌌 REALMX HELPER STARTED")
 
+# =========================
+# GENERAL COMMANDS
+# =========================
+
+import time
+
+START_TIME = time.time()
+
+afk_users = {}
+
+@bot.message_handler(commands=['ping'])
+def ping_cmd(message):
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "📢 Support",
+            url=SUPPORT_CHANNEL
+        )
+    )
+
+    bot.reply_to(
+        message,
+        """
+╔══════════════════╗
+║ 🏓 REALMX PING 🏓 ║
+╚══════════════════╝
+
+🟢 Bot Status: Online
+⚡ Response: Excellent
+""",
+        reply_markup=markup
+    )
+
+
+@bot.message_handler(commands=['id'])
+def id_cmd(message):
+
+    bot.reply_to(
+        message,
+        f"""
+╔══════════════════╗
+║ 🆔 REALMX ID INFO ║
+╚══════════════════╝
+
+👤 User ID: <code>{message.from_user.id}</code>
+
+💬 Chat ID:
+<code>{message.chat.id}</code>
+"""
+    )
+
+
+@bot.message_handler(commands=['info'])
+def info_cmd(message):
+
+    user = message.from_user
+
+    bot.reply_to(
+        message,
+        f"""
+╔════════════════════╗
+║ 👤 USER PROFILE 👤 ║
+╚════════════════════╝
+
+🪪 Name: {user.first_name}
+
+🔗 Username:
+@{user.username if user.username else "None"}
+
+🆔 ID:
+<code>{user.id}</code>
+"""
+    )
+
+
+@bot.message_handler(commands=['report'])
+def report_cmd(message):
+
+    if not message.reply_to_message:
+        bot.reply_to(
+            message,
+            "⚠️ Kisi message ko reply karke /report use karo."
+        )
+        return
+
+    bot.reply_to(
+        message,
+        """
+🚨 REPORT SUBMITTED
+
+🛡️ Admins have been notified.
+"""
+    )
+
+
+@bot.message_handler(commands=['afk'])
+def afk_cmd(message):
+
+    reason = "AFK"
+
+    try:
+        reason = message.text.split(
+            maxsplit=1
+        )[1]
+    except:
+        pass
+
+    afk_users[message.from_user.id] = reason
+
+    bot.reply_to(
+        message,
+        f"""
+🌙 AFK MODE ENABLED
+
+👤 User:
+{message.from_user.first_name}
+
+📝 Reason:
+{reason}
+"""
+    )
+
+
+@bot.message_handler(commands=['uptime'])
+def uptime_cmd(message):
+
+    uptime = int(
+        time.time() - START_TIME
+    )
+
+    hours = uptime // 3600
+    mins = (uptime % 3600) // 60
+
+    bot.reply_to(
+        message,
+        f"""
+🌌 REALMX UPTIME
+
+⏳ Running:
+{hours}h {mins}m
+"""
+    )
+
+
+@bot.message_handler(func=lambda m: True)
+def afk_checker(message):
+
+    if (
+        message.from_user.id
+        in afk_users
+    ):
+        del afk_users[
+            message.from_user.id
+        ]
+
+        bot.reply_to(
+            message,
+            "✅ AFK mode removed."
+        )
+
+    if message.reply_to_message:
+
+        uid = (
+            message.reply_to_message
+            .from_user.id
+        )
+
+        if uid in afk_users:
+
+            bot.reply_to(
+                message,
+                f"""
+🌙 User is AFK
+
+📝 Reason:
+{afk_users[uid]}
+"""
+            )
+
 bot.infinity_polling(skip_pending=True)
