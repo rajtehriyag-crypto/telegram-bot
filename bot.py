@@ -363,6 +363,168 @@ def enemy_cmd(message):
         parse_mode="HTML"
     )
 
+# =========================
+# LUCK COMMAND
+# =========================
+
+@bot.message_handler(commands=["luck"])
+def luck_cmd(message):
+
+    luck = random.randint(1, 100)
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+🍀 <b>ZYNOX LUCK CHECKER</b> 🍀
+
+👤 Player: {message.from_user.first_name}
+
+🎯 Luck Rate: <b>{luck}%</b>
+
+💰 Paisa Luck: OP
+❤️ Love Luck: Active
+🎮 Gaming Luck: Boosted
+
+🔥 Bhai aaj tera din mast lag raha hai!
+""",
+        parse_mode="HTML"
+    )
+
+# =========================
+# AURA COMMAND
+# =========================
+
+@bot.message_handler(commands=["aura"])
+def aura_cmd(message):
+
+    aura = random.randint(70, 100)
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+✨ <b>ZYNOX AURA SCANNER</b> ✨
+
+👤 Player: {message.from_user.first_name}
+
+🌟 Aura Level: <b>{aura}%</b>
+
+👑 Rank: LEGEND
+⚡ Energy: MAX
+🔥 Presence: DOMINATING
+
+💎 Aaj tera aura alag hi level pe hai!
+""",
+        parse_mode="HTML"
+    )
+
+# =========================
+# SIMP COMMAND
+# =========================
+
+@bot.message_handler(commands=["simp"])
+def simp_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        target = message.from_user
+
+    simp = random.randint(1, 100)
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+😭 <b>SIMP DETECTOR</b> 😭
+
+👤 Target: {target.first_name}
+
+💘 Simp Level: <b>{simp}%</b>
+
+🏆 Title:
+Supreme Simp Emperor
+
+😂 Control Bhai Control!
+""",
+        parse_mode="HTML"
+    )
+
+# =========================
+# CLOWN COMMAND
+# =========================
+
+@bot.message_handler(commands=["clown"])
+def clown_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        target = message.from_user
+
+    clown = random.randint(1, 100)
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+🤡 <b>CLOWN DETECTOR PRO</b> 🤡
+
+👤 Target: {target.first_name}
+
+🎪 Clown Rate: <b>{clown}%</b>
+
+🏆 Achievement:
+CEO OF CIRCUS
+
+😂 Group ka entertainer mil gaya!
+""",
+        parse_mode="HTML"
+    )
+
+# =========================
+# ROAST COMMAND
+# =========================
+
+ROASTS = [
+    "🔥 Bhai tera confidence dekh ke lagta hai result se pehle party book kar deta hai.",
+    "😂 Teri speed dekh ke turtle bhi overtake kar de.",
+    "🤣 Tu itna unique hai ki calculator bhi tujhe error dikha de.",
+    "😆 Tere ideas sunke Google bhi confuse ho jata hai.",
+    "🔥 Bhai tu legend hai... bas kis cheez ka ye kisi ko nahi pata."
+]
+
+@bot.message_handler(commands=["roast"])
+def roast_cmd(message):
+
+    target = get_target_user(message)
+
+    if target:
+        bot.send_message(
+            message.chat.id,
+            f"🔥 {target.first_name}\n\n{random.choice(ROASTS)}"
+        )
+    else:
+        bot.send_message(
+            message.chat.id,
+            random.choice(ROASTS)
+        )
+
+# =========================
+# JOKE COMMAND
+# =========================
+
+JOKES = [
+    "😂 Teacher: Homework kyu nahi kiya?\nStudent: Sir network issue tha, notebook connect nahi ho rahi thi.",
+    "🤣 Dost: Kitna padha?\nMe: Bas itna ki kitab mujhe dekh ke khud band ho gayi.",
+    "😆 Mobile 1% pe tha, dil 100% tension me tha.",
+    "😂 Exam aur ex dono achanak yaad aate hain."
+]
+
+@bot.message_handler(commands=["joke"])
+def joke_cmd(message):
+
+    bot.send_message(
+        message.chat.id,
+        random.choice(JOKES)
+    )
 
 print("🎮 Zynox Gaming Started...")
 
