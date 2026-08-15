@@ -173,6 +173,197 @@ Press:
         text
     )
 
+import random
+
+# =========================
+# TARGET USER HELPER
+# =========================
+
+def get_target_user(message):
+    if message.reply_to_message:
+        return message.reply_to_message.from_user
+
+    args = message.text.split(maxsplit=1)
+
+    if len(args) > 1:
+        class FakeUser:
+            def __init__(self, name):
+                self.first_name = name
+
+        return FakeUser(args[1])
+
+    return None
+
+# =========================
+# MARRY COMMAND
+# =========================
+
+@bot.message_handler(commands=["marry"])
+def marry_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        bot.reply_to(
+            message,
+            "💍 Reply kisi user ko karo ya /marry @username use karo."
+        )
+        return
+
+    rate = random.randint(80, 100)
+
+    text = f"""
+💍✨ <b>ZYNOX MARRIAGE SYSTEM</b> ✨💍
+
+🤵 {message.from_user.first_name}
+💖
+👰 {target.first_name}
+
+🎊 Congratulations!
+
+💒 Marriage Success: <b>{rate}%</b>
+🎁 Wedding Gift: 500 Coins
+
+❤️ Official Zynox Couple ❤️
+"""
+
+    bot.send_message(
+        message.chat.id,
+        text,
+        parse_mode="HTML"
+    )
+
+# =========================
+# DIVORCE COMMAND
+# =========================
+
+@bot.message_handler(commands=["divorce"])
+def divorce_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        bot.reply_to(
+            message,
+            "💔 Reply kisi user ko karo ya /divorce @username use karo."
+        )
+        return
+
+    text = f"""
+💔 <b>DIVORCE APPROVED</b> 💔
+
+👤 {message.from_user.first_name}
+⚡
+👤 {target.first_name}
+
+📜 Court Decision: Approved
+💸 Alimony: 999 Coins
+
+😭 Relationship Status: Ended
+"""
+
+    bot.send_message(
+        message.chat.id,
+        text,
+        parse_mode="HTML"
+    )
+
+# =========================
+# SHIP COMMAND
+# =========================
+
+@bot.message_handler(commands=["ship"])
+def ship_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        bot.reply_to(
+            message,
+            "❤️ Reply kisi user ko karo ya /ship @username use karo."
+        )
+        return
+
+    score = random.randint(1, 100)
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+❤️ <b>ZYNOX SHIP SYSTEM</b> ❤️
+
+👤 {message.from_user.first_name}
+💞
+👤 {target.first_name}
+
+💕 Compatibility: <b>{score}%</b>
+""",
+        parse_mode="HTML"
+    )
+
+# =========================
+# BESTIE COMMAND
+# =========================
+
+@bot.message_handler(commands=["bestie"])
+def bestie_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        bot.reply_to(
+            message,
+            "🫂 Reply kisi user ko karo ya /bestie @username use karo."
+        )
+        return
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+🫂 <b>BEST FRIENDS FOREVER</b> 🫂
+
+👤 {message.from_user.first_name}
+🤝
+👤 {target.first_name}
+
+💙 Friendship Level: {random.randint(90,100)}%
+🏆 Official Besties!
+""",
+        parse_mode="HTML"
+    )
+
+# =========================
+# ENEMY COMMAND
+# =========================
+
+@bot.message_handler(commands=["enemy"])
+def enemy_cmd(message):
+
+    target = get_target_user(message)
+
+    if not target:
+        bot.reply_to(
+            message,
+            "😈 Reply kisi user ko karo ya /enemy @username use karo."
+        )
+        return
+
+    bot.send_message(
+        message.chat.id,
+        f"""
+⚔️ <b>ENEMY MODE ACTIVATED</b> ⚔️
+
+😈 {message.from_user.first_name}
+🆚
+😈 {target.first_name}
+
+🔥 Rivalry Level: {random.randint(80,100)}%
+
+⚡ Battle Begins!
+""",
+        parse_mode="HTML"
+    )
+
+
 print("🎮 Zynox Gaming Started...")
 
 bot.infinity_polling(skip_pending=True)
