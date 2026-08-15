@@ -3,7 +3,7 @@ from telebot import types
 import os
 import json
 
-BOT_TOKEN = os.getenv("8897042969:AAFVI298X8Y9kAE0N2MhNDYBcSNfo1klyLU")
+BOT_TOKEN = "8897042969:AAFVI298X8Y9kAE0N2MhNDYBcSNfo1klyLU"
 OWNER_ID = 8727799160
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
