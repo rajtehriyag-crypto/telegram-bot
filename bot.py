@@ -296,6 +296,23 @@ def callbacks(call):
             reply_markup=markup
         )
 
+@bot.message_handler(commands=["profile"])
+def profile_cmd(message):
+
+    bot.reply_to(
+        message,
+        """
+👤 PROFILE
+
+⚡ Aura: 0
+
+🏅 Rank: 🥉 Bronze
+
+🔥 Streak: 0
+
+💍 Partner: Single
+"""
+    )
 
 print("🎮 Zynox Gaming Started...")
 bot.infinity_polling(skip_pending=True)
