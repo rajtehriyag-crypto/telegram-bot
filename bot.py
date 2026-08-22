@@ -1,2680 +1,1601 @@
-# Complete fixed code with all working systems
-
-import random
-import time
-import re
-from datetime import datetime, timedelta
-from telebot import TeleBot, types
-import json
 import os
+import json
+import random
 import sqlite3
+import time
+import logging
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
+from threading import Lock
 
-# Initialize bot with your token
-TOKEN = "8897042969:AAFVI298X8Y9kAE0N2MhNDYBcSNfo1klyLU"
-bot = TeleBot(TOKEN)
+import telebot
+from telebot import types
+from dotenv import load_dotenv
 
-# Owner ID
-OWNER_ID = 8727799160
+# Load environment variables
+load_dotenv()
 
-# Support Group and Channel
-SUPPORT_GROUP = "https://t.me/+97rox0VQWXNiMzg1"
-SUPPORT_CHANNEL = "https://t.me/+CS-ZvjWSB1oxZjZl"
+# Configuration
+BOT_TOKEN = "8897042969:AAFVI298X8Y9kAE0N2MhNDYBcSNfo1klyLU"
+OWNER_ID = int(os.getenv('OWNER_ID', '8727799160'))
+SUPPORT_CHANNEL = os.getenv('SUPPORT_CHANNEL', 'https://t.me/+CS-ZvjWSB1oxZjZl')
+SUPPORT_GROUP = os.getenv('SUPPORT_GROUP', 'https://t.me/+97rox0VQWXNiMzg1')
 
-# Database setup
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required!")
+
+# Initialize bot
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Constants
+DAILY_REWARD = 5000
+GROUP_CLAIM_REWARD = 10000
+ROB_MAX_AMOUNT = 10000
+PROTECTION_DURATION = 24
+PvP_EXPIRY = 120
+
+# Game rewards
+GAME_REWARDS = {
+    'blackjack': 50, 'card': 20, 'dice': 25, 'coinflip': 15,
+    'rps': 20, 'tictactoe': 40, 'fasttype': 35, 'quiz': 30,
+    'emoji': 25, 'guess': 20
+}
+
+# XP rewards
+XP_REWARDS = {'win': 25, 'play': 10, 'quiz_correct': 20, 'fasttype_win': 30, 'claim': 15}
+
+# Ranks
+RANKS = [
+    {'name': '🥉 Bronze', 'threshold': 0},
+    {'name': '🥈 Silver', 'threshold': 10000},
+    {'name': '🥇 Gold', 'threshold': 50000},
+    {'name': '💎 Platinum', 'threshold': 150000},
+    {'name': '🔷 Diamond', 'threshold': 400000},
+    {'name': '👑 Heroic', 'threshold': 1000000},
+    {'name': '🔥 Master', 'threshold': 2500000},
+    {'name': '🏆 Grandmaster', 'threshold': 5000000},
+    {'name': '🌟 Elite', 'threshold': 10000000}
+]
+
+LEVEL_XP_REQUIREMENTS = [0] + [i * 100 for i in range(1, 101)]
+
+# Quiz Questions
+QUIZ_QUESTIONS = [
+    {'question': 'Which planet is known as the Red Planet?', 'options': ['Venus', 'Mars', 'Jupiter', 'Saturn'], 'correct': 1},
+    {'question': 'What is the capital of France?', 'options': ['London', 'Berlin', 'Paris', 'Madrid'], 'correct': 2},
+    {'question': 'Which element has the chemical symbol "Au"?', 'options': ['Silver', 'Copper', 'Gold', 'Iron'], 'correct': 2},
+    {'question': 'What is the largest ocean on Earth?', 'options': ['Atlantic', 'Indian', 'Arctic', 'Pacific'], 'correct': 3},
+    {'question': 'Who developed the theory of relativity?', 'options': ['Newton', 'Einstein', 'Hawking', 'Galileo'], 'correct': 1},
+    {'question': 'What is the hardest natural substance?', 'options': ['Gold', 'Iron', 'Diamond', 'Platinum'], 'correct': 2},
+    {'question': 'Which animal is known as the King of the Jungle?', 'options': ['Tiger', 'Lion', 'Elephant', 'Bear'], 'correct': 1},
+    {'question': 'What is the chemical formula for water?', 'options': ['CO2', 'H2O', 'NaCl', 'HCl'], 'correct': 1},
+    {'question': 'Which country has the largest population?', 'options': ['India', 'China', 'USA', 'Indonesia'], 'correct': 0},
+    {'question': 'What is the tallest mountain in the world?', 'options': ['K2', 'Everest', 'Makalu', 'Lhotse'], 'correct': 1}
+]
+
+EMOJI_QUESTIONS = [
+    {'emojis': '🚢 ❤️ 💔', 'answer': 'titanic'},
+    {'emojis': '👽 🔫 👨', 'answer': 'alien'},
+    {'emojis': '👑 🦁 🐗', 'answer': 'lion king'},
+    {'emojis': '🤖 ❤️ 👨', 'answer': 'wall-e'},
+    {'emojis': '🧙 ⚡ 🎓', 'answer': 'harry potter'},
+    {'emojis': '🕷️ 👨 🏙️', 'answer': 'spiderman'},
+    {'emojis': '😈 👔 💼', 'answer': 'devil wears prada'},
+    {'emojis': '🚀 👨 🌌', 'answer': 'interstellar'},
+    {'emojis': '🧜 🧜‍♀️ 🌊', 'answer': 'aquaman'},
+    {'emojis': '🐾 🦁 🎶', 'answer': 'lion king'}
+]
+
+FAST_TYPE_WORDS = ['gaming', 'python', 'coding', 'programming', 'bot', 'telegram', 'development', 'software', 'engineer', 'gamer', 'streamer', 'controller', 'keyboard', 'monitor', 'processor', 'memory', 'storage']
+
+# ============== DATABASE ==============
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect('zynox.db', check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.create_tables()
-        self.create_group_management_tables()
-    
-    def create_tables(self):
-        # Users table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                aura INTEGER DEFAULT 0,
-                rank TEXT DEFAULT 'Bronze I',
-                streak INTEGER DEFAULT 0,
-                last_claim DATE,
-                is_married INTEGER DEFAULT 0,
-                partner_id INTEGER DEFAULT NULL,
-                messages INTEGER DEFAULT 0,
-                quiz_wins INTEGER DEFAULT 0,
-                game_wins INTEGER DEFAULT 0,
-                achievements TEXT DEFAULT '[]',
-                registered_date DATE
-            )
-        ''')
-        
-        # Marriage proposals table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS proposals (
-                proposer_id INTEGER,
-                target_id INTEGER,
-                timestamp DATETIME,
-                status TEXT DEFAULT 'pending'
-            )
-        ''')
-        
-        # Divorce requests table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS divorce_requests (
-                user_id INTEGER,
-                partner_id INTEGER,
-                timestamp DATETIME,
-                status TEXT DEFAULT 'pending'
-            )
-        ''')
-        
-        # Daily tasks table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS daily_tasks (
-                user_id INTEGER,
-                task_date DATE,
-                tasks TEXT,
-                completed_tasks TEXT,
-                reward_claimed INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # Groups table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS groups (
-                group_id INTEGER PRIMARY KEY,
-                group_name TEXT,
-                added_by INTEGER,
-                added_date DATE
-            )
-        ''')
-        
-        # Group bonus tracking
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS group_bonus (
-                user_id INTEGER,
-                group_id INTEGER,
-                bonus_date DATE,
-                PRIMARY KEY (user_id, group_id)
-            )
-        ''')
-        
-        # Custom media table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS custom_media (
-                media_type TEXT,
-                file_id TEXT,
-                added_by INTEGER,
-                added_date DATE
-            )
-        ''')
-        
-        # Sudo users
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sudo_users (
-                user_id INTEGER PRIMARY KEY
-            )
-        ''')
-        
-        # Quiz questions
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS quiz_questions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT,
-                question TEXT,
-                options TEXT,
-                answer INTEGER
-            )
-        ''')
-        
-        self.conn.commit()
-        
-        # Add default quiz questions if none exist
-        self.cursor.execute('SELECT COUNT(*) FROM quiz_questions')
-        if self.cursor.fetchone()[0] == 0:
-            default_questions = [
-                ('GK', 'Which planet is known as the Red Planet?', '["Earth","Mars","Venus","Jupiter"]', 1),
-                ('GK', 'What is the largest ocean on Earth?', '["Atlantic","Pacific","Indian","Arctic"]', 1),
-                ('GK', 'Who wrote "Hamlet"?', '["Shakespeare","Dickens","Hemingway","Tolkien"]', 0),
-                ('Gaming', 'What is the most popular game in 2024?', '["PUBG","Fortnite","Minecraft","GTA V"]', 2),
-                ('Gaming', 'Which company created GTA?', '["EA","Ubisoft","Rockstar","Activision"]', 2),
-                ('Sports', 'Which sport is known as the "king of sports"?', '["Cricket","Football","Basketball","Tennis"]', 1),
-                ('Sports', 'How many players are in a cricket team?', '["11","10","9","12"]', 0),
-                ('Movies', 'Who played Iron Man?', '["Chris Evans","Robert Downey Jr.","Chris Hemsworth","Mark Ruffalo"]', 1),
-                ('Movies', 'What is the highest grossing movie of all time?', '["Avatar","Titanic","Avengers","Star Wars"]', 0),
-                ('Riddles', 'I have cities, but no houses. I have mountains, but no trees. I have water, but no fish. What am I?', '["Map","Globe","Book","Painting"]', 0),
-            ]
+        self.db_path = 'database/zynox.db'
+        os.makedirs('database', exist_ok=True)
+        self.lock = Lock()
+        self._init_tables()
+
+    def _get_connection(self):
+        return sqlite3.connect(self.db_path, check_same_thread=False)
+
+    def _init_tables(self):
+        with self._get_connection() as conn:
+            c = conn.cursor()
             
-            for q in default_questions:
-                self.cursor.execute('''
-                    INSERT INTO quiz_questions (category, question, options, answer)
-                    VALUES (?, ?, ?, ?)
-                ''', (q[0], q[1], q[2], q[3]))
+            # Users
+            c.execute('''CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
+                coins INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1,
+                total_games INTEGER DEFAULT 0, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, draws INTEGER DEFAULT 0,
+                protection_expiry INTEGER DEFAULT 0, daily_claim_timestamp INTEGER DEFAULT 0,
+                first_start_timestamp INTEGER DEFAULT 0, last_activity_timestamp INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0, level_rewards TEXT DEFAULT '[]', current_rank TEXT DEFAULT '🥉 Bronze'
+            )''')
             
-            self.conn.commit()
-    
-    def create_group_management_tables(self):
-        """Create group management tables"""
-        # Group settings table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS group_settings (
-                group_id INTEGER PRIMARY KEY,
-                welcome_enabled INTEGER DEFAULT 1,
-                goodbye_enabled INTEGER DEFAULT 1,
-                anti_spam INTEGER DEFAULT 1,
-                anti_links INTEGER DEFAULT 0,
-                anti_media INTEGER DEFAULT 0,
-                language TEXT DEFAULT 'en',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Group admins table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS group_admins (
-                group_id INTEGER,
-                user_id INTEGER,
-                promoted_by INTEGER,
-                promotion_level INTEGER DEFAULT 1,
-                promotion_title TEXT DEFAULT 'Member',
-                promoted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, user_id)
-            )
-        ''')
-        
-        # Muted users table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS muted_users (
-                group_id INTEGER,
-                user_id INTEGER,
-                muted_by INTEGER,
-                mute_duration INTEGER,
-                mute_reason TEXT,
-                muted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                unmuted_at DATETIME,
-                PRIMARY KEY (group_id, user_id)
-            )
-        ''')
-        
-        # Warnings table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_warnings (
-                group_id INTEGER,
-                user_id INTEGER,
-                warned_by INTEGER,
-                warning_reason TEXT,
-                warning_level INTEGER DEFAULT 1,
-                warned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, user_id, warned_at)
-            )
-        ''')
-        
-        # Banned users table
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS banned_users (
-                group_id INTEGER,
-                user_id INTEGER,
-                banned_by INTEGER,
-                ban_reason TEXT,
-                banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (group_id, user_id)
-            )
-        ''')
-        
-        self.conn.commit()
-    
-    def get_group_setting(self, group_id, setting_key):
-        self.cursor.execute(
-            f'SELECT {setting_key} FROM group_settings WHERE group_id = ?',
-            (group_id,)
-        )
-        result = self.cursor.fetchone()
-        return result[0] if result else 1
-    
-    def update_group_setting(self, group_id, setting_key, value):
-        self.cursor.execute(
-            f'UPDATE group_settings SET {setting_key} = ? WHERE group_id = ?',
-            (value, group_id)
-        )
-        self.conn.commit()
-    
-    def add_group_admin(self, group_id, user_id, promoted_by, level=1):
-        titles = {1: 'Member', 2: 'Senior Member', 3: 'VIP Member', 4: 'Elite Member', 5: 'Legendary Member'}
-        title = titles.get(level, 'Member')
-        self.cursor.execute('''
-            INSERT OR REPLACE INTO group_admins 
-            (group_id, user_id, promoted_by, promotion_level, promotion_title)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (group_id, user_id, promoted_by, level, title))
-        self.conn.commit()
-    
-    def remove_group_admin(self, group_id, user_id):
-        self.cursor.execute('''
-            DELETE FROM group_admins WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        self.conn.commit()
-    
-    def get_group_admins(self, group_id):
-        self.cursor.execute('''
-            SELECT * FROM group_admins WHERE group_id = ? ORDER BY promotion_level DESC
-        ''', (group_id,))
-        return self.cursor.fetchall()
-    
-    def is_group_admin(self, group_id, user_id):
-        self.cursor.execute('''
-            SELECT * FROM group_admins WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        return self.cursor.fetchone() is not None
-    
-    def add_muted_user(self, group_id, user_id, muted_by, duration, reason=''):
-        unmuted_at = datetime.now() + timedelta(seconds=duration)
-        self.cursor.execute('''
-            INSERT OR REPLACE INTO muted_users 
-            (group_id, user_id, muted_by, mute_duration, mute_reason, unmuted_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (group_id, user_id, muted_by, duration, reason, unmuted_at))
-        self.conn.commit()
-    
-    def remove_muted_user(self, group_id, user_id):
-        self.cursor.execute('''
-            DELETE FROM muted_users WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        self.conn.commit()
-    
-    def is_muted(self, group_id, user_id):
-        self.cursor.execute('''
-            SELECT * FROM muted_users 
-            WHERE group_id = ? AND user_id = ? AND unmuted_at > datetime('now')
-        ''', (group_id, user_id))
-        return self.cursor.fetchone() is not None
-    
-    def get_muted_users(self, group_id):
-        self.cursor.execute('''
-            SELECT * FROM muted_users 
-            WHERE group_id = ? AND unmuted_at > datetime('now')
-        ''', (group_id,))
-        return self.cursor.fetchall()
-    
-    def add_warning(self, group_id, user_id, warned_by, reason, level=1):
-        self.cursor.execute('''
-            INSERT INTO user_warnings 
-            (group_id, user_id, warned_by, warning_reason, warning_level)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (group_id, user_id, warned_by, reason, level))
-        self.conn.commit()
-        
-        # Check if user has too many warnings (3 = mute, 5 = ban)
-        self.cursor.execute('''
-            SELECT COUNT(*) FROM user_warnings 
-            WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        count = self.cursor.fetchone()[0]
-        return count
-    
-    def clear_warnings(self, group_id, user_id):
-        self.cursor.execute('''
-            DELETE FROM user_warnings WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        self.conn.commit()
-    
-    def add_banned_user(self, group_id, user_id, banned_by, reason=''):
-        self.cursor.execute('''
-            INSERT OR REPLACE INTO banned_users 
-            (group_id, user_id, banned_by, ban_reason)
-            VALUES (?, ?, ?, ?)
-        ''', (group_id, user_id, banned_by, reason))
-        self.conn.commit()
-    
-    def remove_banned_user(self, group_id, user_id):
-        self.cursor.execute('''
-            DELETE FROM banned_users WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        self.conn.commit()
-    
-    def is_banned(self, group_id, user_id):
-        self.cursor.execute('''
-            SELECT * FROM banned_users WHERE group_id = ? AND user_id = ?
-        ''', (group_id, user_id))
-        return self.cursor.fetchone() is not None
-    
-    def add_user(self, user_id, username, first_name):
-        self.cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, first_name, registered_date)
-            VALUES (?, ?, ?, ?)
-        ''', (user_id, username, first_name, datetime.now().date()))
-        self.conn.commit()
-    
-    def get_user(self, user_id):
-        self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        return self.cursor.fetchone()
-    
-    def update_aura(self, user_id, amount):
-        self.cursor.execute('UPDATE users SET aura = aura + ? WHERE user_id = ?', (amount, user_id))
-        self.conn.commit()
-    
-    def set_aura(self, user_id, amount):
-        self.cursor.execute('UPDATE users SET aura = ? WHERE user_id = ?', (amount, user_id))
-        self.conn.commit()
-    
-    def update_rank(self, user_id, rank):
-        self.cursor.execute('UPDATE users SET rank = ? WHERE user_id = ?', (rank, user_id))
-        self.conn.commit()
-    
-    def update_streak(self, user_id):
-        self.cursor.execute('UPDATE users SET streak = streak + 1 WHERE user_id = ?', (user_id,))
-        self.conn.commit()
-    
-    def reset_streak(self, user_id):
-        self.cursor.execute('UPDATE users SET streak = 0 WHERE user_id = ?', (user_id,))
-        self.conn.commit()
-    
-    def get_marriage_status(self, user_id):
-        self.cursor.execute('SELECT is_married, partner_id FROM users WHERE user_id = ?', (user_id,))
-        return self.cursor.fetchone()
-    
-    def marry_users(self, user1, user2):
-        self.cursor.execute('UPDATE users SET is_married = 1, partner_id = ? WHERE user_id = ?', (user2, user1))
-        self.cursor.execute('UPDATE users SET is_married = 1, partner_id = ? WHERE user_id = ?', (user1, user2))
-        self.conn.commit()
-    
-    def divorce_users(self, user1, user2):
-        self.cursor.execute('UPDATE users SET is_married = 0, partner_id = NULL WHERE user_id = ?', (user1,))
-        self.cursor.execute('UPDATE users SET is_married = 0, partner_id = NULL WHERE user_id = ?', (user2,))
-        self.conn.commit()
-    
-    def add_proposal(self, proposer, target):
-        self.cursor.execute('''
-            INSERT INTO proposals (proposer_id, target_id, timestamp, status)
-            VALUES (?, ?, ?, 'pending')
-        ''', (proposer, target, datetime.now()))
-        self.conn.commit()
-    
-    def get_proposal(self, target_id):
-        self.cursor.execute('''
-            SELECT * FROM proposals 
-            WHERE target_id = ? AND status = 'pending' 
-            ORDER BY timestamp DESC LIMIT 1
-        ''', (target_id,))
-        return self.cursor.fetchone()
-    
-    def update_proposal_status(self, proposer_id, target_id, status):
-        self.cursor.execute('''
-            UPDATE proposals SET status = ? 
-            WHERE proposer_id = ? AND target_id = ? AND status = 'pending'
-        ''', (status, proposer_id, target_id))
-        self.conn.commit()
-    
-    def add_divorce_request(self, user_id, partner_id):
-        self.cursor.execute('''
-            INSERT INTO divorce_requests (user_id, partner_id, timestamp, status)
-            VALUES (?, ?, ?, 'pending')
-        ''', (user_id, partner_id, datetime.now()))
-        self.conn.commit()
-    
-    def get_divorce_request(self, partner_id):
-        self.cursor.execute('''
-            SELECT * FROM divorce_requests 
-            WHERE partner_id = ? AND status = 'pending' 
-            ORDER BY timestamp DESC LIMIT 1
-        ''', (partner_id,))
-        return self.cursor.fetchone()
-    
-    def update_divorce_status(self, user_id, partner_id, status):
-        self.cursor.execute('''
-            UPDATE divorce_requests SET status = ? 
-            WHERE user_id = ? AND partner_id = ? AND status = 'pending'
-        ''', (status, user_id, partner_id))
-        self.conn.commit()
-    
-    def add_group(self, group_id, group_name, added_by):
-        self.cursor.execute('''
-            INSERT OR IGNORE INTO groups (group_id, group_name, added_by, added_date)
-            VALUES (?, ?, ?, ?)
-        ''', (group_id, group_name, added_by, datetime.now().date()))
-        self.conn.commit()
-    
-    def get_group_bonus(self, user_id, group_id):
-        self.cursor.execute('''
-            SELECT * FROM group_bonus WHERE user_id = ? AND group_id = ?
-        ''', (user_id, group_id))
-        return self.cursor.fetchone()
-    
-    def add_group_bonus(self, user_id, group_id):
-        self.cursor.execute('''
-            INSERT INTO group_bonus (user_id, group_id, bonus_date)
-            VALUES (?, ?, ?)
-        ''', (user_id, group_id, datetime.now().date()))
-        self.conn.commit()
-    
-    def add_media(self, media_type, file_id, added_by):
-        self.cursor.execute('''
-            INSERT INTO custom_media (media_type, file_id, added_by, added_date)
-            VALUES (?, ?, ?, ?)
-        ''', (media_type, file_id, added_by, datetime.now().date()))
-        self.conn.commit()
-    
-    def get_media(self, media_type):
-        self.cursor.execute('''
-            SELECT file_id FROM custom_media WHERE media_type = ?
-            ORDER BY RANDOM() LIMIT 1
-        ''', (media_type,))
-        result = self.cursor.fetchone()
-        return result[0] if result else None
-    
-    def add_sudo(self, user_id):
-        self.cursor.execute('INSERT OR IGNORE INTO sudo_users (user_id) VALUES (?)', (user_id,))
-        self.conn.commit()
-    
-    def remove_sudo(self, user_id):
-        self.cursor.execute('DELETE FROM sudo_users WHERE user_id = ?', (user_id,))
-        self.conn.commit()
-    
-    def get_sudo_list(self):
-        self.cursor.execute('SELECT user_id FROM sudo_users')
-        return [row[0] for row in self.cursor.fetchall()]
-    
-    def is_sudo(self, user_id):
-        self.cursor.execute('SELECT * FROM sudo_users WHERE user_id = ?', (user_id,))
-        return self.cursor.fetchone() is not None
-    
-    def add_quiz_question(self, category, question, options, answer):
-        options_json = json.dumps(options)
-        self.cursor.execute('''
-            INSERT INTO quiz_questions (category, question, options, answer)
-            VALUES (?, ?, ?, ?)
-        ''', (category, question, options_json, answer))
-        self.conn.commit()
-    
-    def get_random_quiz(self):
-        self.cursor.execute('SELECT * FROM quiz_questions ORDER BY RANDOM() LIMIT 1')
-        result = self.cursor.fetchone()
-        if result:
+            # Groups
+            c.execute('''CREATE TABLE IF NOT EXISTS groups (
+                group_id INTEGER PRIMARY KEY, group_name TEXT, group_claimed INTEGER DEFAULT 0, member_count INTEGER DEFAULT 0
+            )''')
+            
+            # Game stats
+            c.execute('''CREATE TABLE IF NOT EXISTS game_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, game_type TEXT,
+                played INTEGER DEFAULT 0, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, draws INTEGER DEFAULT 0
+            )''')
+            
+            # Game sessions
+            c.execute('''CREATE TABLE IF NOT EXISTS game_sessions (
+                session_id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, game_type TEXT,
+                player1_id INTEGER, player2_id INTEGER DEFAULT NULL, current_state TEXT, moves TEXT,
+                winner_id INTEGER DEFAULT NULL, status TEXT DEFAULT 'active',
+                created_at INTEGER, expires_at INTEGER
+            )''')
+            
+            # Quiz sessions
+            c.execute('''CREATE TABLE IF NOT EXISTS quiz_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, question_id INTEGER,
+                correct_answer INTEGER, status TEXT DEFAULT 'active', created_at INTEGER, expires_at INTEGER
+            )''')
+            
+            # Emoji sessions
+            c.execute('''CREATE TABLE IF NOT EXISTS emoji_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, question_id INTEGER,
+                correct_answer TEXT, status TEXT DEFAULT 'active', created_at INTEGER, expires_at INTEGER
+            )''')
+            
+            # Fast type sessions
+            c.execute('''CREATE TABLE IF NOT EXISTS fasttype_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, word TEXT,
+                status TEXT DEFAULT 'active', created_at INTEGER, expires_at INTEGER
+            )''')
+            
+            # Number sessions
+            c.execute('''CREATE TABLE IF NOT EXISTS number_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, number INTEGER,
+                status TEXT DEFAULT 'active', created_at INTEGER, expires_at INTEGER
+            )''')
+            
+            # Bans
+            c.execute('''CREATE TABLE IF NOT EXISTS bans (
+                user_id INTEGER PRIMARY KEY, reason TEXT, banned_at INTEGER
+            )''')
+            
+            # Settings
+            c.execute('''CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY, value TEXT
+            )''')
+            
+            # Init quiz
+            c.execute('SELECT value FROM settings WHERE key = "quiz_initialized"')
+            if not c.fetchone():
+                c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES ("quiz_questions", ?)', (json.dumps(QUIZ_QUESTIONS),))
+                c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES ("emoji_questions", ?)', (json.dumps(EMOJI_QUESTIONS),))
+                c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES ("quiz_initialized", "true")')
+            
+            conn.commit()
+
+    def get_user(self, user_id, username=None, first_name=None):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            c.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+            user = c.fetchone()
+            
+            if not user:
+                if not username: username = str(user_id)
+                if not first_name: first_name = f'User_{user_id}'
+                
+                c.execute('INSERT INTO users (user_id, username, first_name, first_start_timestamp, last_activity_timestamp) VALUES (?, ?, ?, ?, ?)',
+                         (user_id, username, first_name, int(time.time()), int(time.time())))
+                conn.commit()
+                
+                for game in ['blackjack', 'card', 'dice', 'coinflip', 'rps', 'tictactoe', 'fasttype', 'quiz', 'emoji', 'guess']:
+                    c.execute('INSERT INTO game_stats (user_id, game_type) VALUES (?, ?)', (user_id, game))
+                conn.commit()
+                
+                self._notify_owner_new_user(user_id, username, first_name)
+                
+                c.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+                user = c.fetchone()
+            
             return {
-                'id': result[0],
-                'category': result[1],
-                'question': result[2],
-                'options': json.loads(result[3]),
-                'answer': result[4]
+                'user_id': user[0], 'username': user[1], 'first_name': user[2],
+                'coins': user[3], 'xp': user[4], 'level': user[5],
+                'total_games': user[6], 'wins': user[7], 'losses': user[8], 'draws': user[9],
+                'protection_expiry': user[10], 'daily_claim_timestamp': user[11],
+                'first_start_timestamp': user[12], 'last_activity_timestamp': user[13],
+                'is_banned': user[14], 'level_rewards': json.loads(user[15]) if user[15] else [],
+                'current_rank': user[16] if len(user) > 16 else '🥉 Bronze'
             }
-        return None
+
+    def _notify_owner_new_user(self, user_id, username, first_name):
+        try:
+            total = self.get_total_users()
+            bot.send_message(OWNER_ID, f"🔔 <b>NEW USER STARTED BOT</b>\n\n👤 Name: {first_name}\n📛 Username: @{username}\n🆔 User ID: <code>{user_id}</code>\n\n📅 Date: {datetime.now().strftime('%d %b %Y')}\n⏰ Time: {datetime.now().strftime('%I:%M %p')}\n\n👥 Total Users: {total:,}")
+        except: pass
+
+    def get_total_users(self):
+        with self._get_connection() as conn:
+            return conn.cursor().execute('SELECT COUNT(*) FROM users').fetchone()[0]
+
+    def update_user_coins(self, user_id, amount):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            c.execute('UPDATE users SET coins = coins + ? WHERE user_id = ?', (amount, user_id))
+            conn.commit()
+            self._update_rank(user_id)
+
+    def update_user_xp(self, user_id, xp_amount):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            c.execute('UPDATE users SET xp = xp + ? WHERE user_id = ?', (xp_amount, user_id))
+            conn.commit()
+            
+            user = self.get_user(user_id)
+            level, total_xp = user['level'], user['xp'] + xp_amount
+            new_level = level
+            while new_level < len(LEVEL_XP_REQUIREMENTS) and total_xp >= LEVEL_XP_REQUIREMENTS[new_level]:
+                new_level += 1
+            
+            if new_level > level:
+                rewards = user['level_rewards']
+                for i in range(level, new_level):
+                    if i not in rewards:
+                        rewards.append(i)
+                        bonus = i * 1000
+                        self.update_user_coins(user_id, bonus)
+                        try:
+                            bot.send_message(user_id, f"🎉 <b>LEVEL UP!</b>\n\n⭐ Level {i} → {i + 1}\n💰 Reward: +{bonus:,} Coins\n✨ XP: {total_xp:,}")
+                        except: pass
+                
+                c.execute('UPDATE users SET level = ?, level_rewards = ? WHERE user_id = ?', (new_level, json.dumps(rewards), user_id))
+                conn.commit()
+
+    def _update_rank(self, user_id):
+        coins = self.get_user(user_id)['coins']
+        rank = RANKS[0]['name']
+        for r in RANKS:
+            if coins >= r['threshold']: rank = r['name']
+        with self._get_connection() as conn:
+            conn.cursor().execute('UPDATE users SET current_rank = ? WHERE user_id = ?', (rank, user_id))
+            conn.commit()
+
+    def get_user_rank(self, user_id):
+        coins = self.get_user(user_id)['coins']
+        for r in reversed(RANKS):
+            if coins >= r['threshold']: return r['name']
+        return RANKS[0]['name']
+
+    def get_global_rank(self, user_id):
+        with self._get_connection() as conn:
+            return conn.cursor().execute('SELECT COUNT(*) + 1 FROM users WHERE coins > (SELECT coins FROM users WHERE user_id = ?)', (user_id,)).fetchone()[0]
+
+    def get_leaderboard(self, limit=10):
+        with self._get_connection() as conn:
+            return [{'user_id': r[0], 'username': r[1], 'coins': r[2], 'first_name': r[3]} 
+                    for r in conn.cursor().execute('SELECT user_id, username, coins, first_name FROM users ORDER BY coins DESC LIMIT ?', (limit,)).fetchall()]
+
+    def get_user_game_stats(self, user_id):
+        with self._get_connection() as conn:
+            result = {}
+            for r in conn.cursor().execute('SELECT * FROM game_stats WHERE user_id = ?', (user_id,)).fetchall():
+                result[r[2]] = {'played': r[3], 'wins': r[4], 'losses': r[5], 'draws': r[6]}
+            return result
+
+    def update_game_stats(self, user_id, game_type, result):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            if result == 'win':
+                c.execute('UPDATE game_stats SET played = played + 1, wins = wins + 1 WHERE user_id = ? AND game_type = ?', (user_id, game_type))
+                c.execute('UPDATE users SET total_games = total_games + 1, wins = wins + 1 WHERE user_id = ?', (user_id,))
+            elif result == 'loss':
+                c.execute('UPDATE game_stats SET played = played + 1, losses = losses + 1 WHERE user_id = ? AND game_type = ?', (user_id, game_type))
+                c.execute('UPDATE users SET total_games = total_games + 1, losses = losses + 1 WHERE user_id = ?', (user_id,))
+            elif result == 'draw':
+                c.execute('UPDATE game_stats SET played = played + 1, draws = draws + 1 WHERE user_id = ? AND game_type = ?', (user_id, game_type))
+                c.execute('UPDATE users SET total_games = total_games + 1, draws = draws + 1 WHERE user_id = ?', (user_id,))
+            conn.commit()
+
+    def get_protection(self, user_id):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT protection_expiry FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if r and r[0] > int(time.time()): return True, r[0] - int(time.time())
+            return False, 0
+
+    def set_protection(self, user_id):
+        with self._get_connection() as conn:
+            conn.cursor().execute('UPDATE users SET protection_expiry = ? WHERE user_id = ?', (int(time.time()) + PROTECTION_DURATION * 3600, user_id))
+            conn.commit()
+
+    def can_claim_daily(self, user_id):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT daily_claim_timestamp FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if r and r[0] > 0:
+                next_claim = r[0] + 24 * 3600
+                if next_claim > int(time.time()): return False, next_claim - int(time.time())
+            return True, 0
+
+    def claim_daily(self, user_id):
+        with self._get_connection() as conn:
+            conn.cursor().execute('UPDATE users SET daily_claim_timestamp = ? WHERE user_id = ?', (int(time.time()), user_id))
+            conn.commit()
+        self.update_user_coins(user_id, DAILY_REWARD)
+        self.update_user_xp(user_id, XP_REWARDS['claim'])
+        return DAILY_REWARD
+
+    def get_group_claim_status(self, group_id):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT group_claimed FROM groups WHERE group_id = ?', (group_id,)).fetchone()
+            return r and r[0] == 1
+
+    def claim_group_reward(self, group_id, user_id):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            if c.execute('SELECT group_claimed FROM groups WHERE group_id = ?', (group_id,)).fetchone():
+                return False
+            c.execute('INSERT OR REPLACE INTO groups (group_id, group_claimed) VALUES (?, 1)', (group_id,))
+            conn.commit()
+        self.update_user_coins(user_id, GROUP_CLAIM_REWARD)
+        return True
+
+    def save_game_session(self, chat_id, game_type, player1_id, player2_id=None, moves=None, state=None):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            created = int(time.time())
+            c.execute('INSERT INTO game_sessions (chat_id, game_type, player1_id, player2_id, current_state, moves, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                     (chat_id, game_type, player1_id, player2_id, state or 'waiting', json.dumps(moves or {}), created, created + PvP_EXPIRY))
+            conn.commit()
+            return c.lastrowid
+
+    def update_game_session(self, session_id, **kwargs):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            updates, values = [], []
+            for k, v in kwargs.items():
+                if k == 'moves': v = json.dumps(v)
+                updates.append(f"{k} = ?")
+                values.append(v)
+            if updates:
+                values.append(session_id)
+                c.execute(f"UPDATE game_sessions SET {', '.join(updates)} WHERE session_id = ?", values)
+                conn.commit()
+
+    def get_game_session(self, session_id):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT * FROM game_sessions WHERE session_id = ?', (session_id,)).fetchone()
+            if r:
+                return {'session_id': r[0], 'chat_id': r[1], 'game_type': r[2], 'player1_id': r[3], 'player2_id': r[4],
+                        'current_state': r[5], 'moves': json.loads(r[6]) if r[6] else {}, 'winner_id': r[7],
+                        'status': r[8], 'created_at': r[9], 'expires_at': r[10]}
+            return None
+
+    def save_quiz_session(self, chat_id, question_id, correct_answer):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            created = int(time.time())
+            c.execute('INSERT INTO quiz_sessions (chat_id, question_id, correct_answer, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+                     (chat_id, question_id, correct_answer, created, created + 60))
+            conn.commit()
+            return c.lastrowid
+
+    def update_quiz_session(self, session_id, status):
+        with self._get_connection() as conn:
+            conn.cursor().execute('UPDATE quiz_sessions SET status = ? WHERE id = ?', (status, session_id))
+            conn.commit()
+
+    def get_quiz_session(self, session_id):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT * FROM quiz_sessions WHERE id = ?', (session_id,)).fetchone()
+            if r:
+                return {'id': r[0], 'chat_id': r[1], 'question_id': r[2], 'correct_answer': r[3], 'status': r[4], 'created_at': r[5], 'expires_at': r[6]}
+            return None
+
+    def save_emoji_session(self, chat_id, question_id, correct_answer):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            created = int(time.time())
+            c.execute('INSERT INTO emoji_sessions (chat_id, question_id, correct_answer, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+                     (chat_id, question_id, correct_answer, created, created + 60))
+            conn.commit()
+            return c.lastrowid
+
+    def save_fasttype_session(self, chat_id, word):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            created = int(time.time())
+            c.execute('INSERT INTO fasttype_sessions (chat_id, word, created_at, expires_at) VALUES (?, ?, ?, ?)',
+                     (chat_id, word, created, created + 30))
+            conn.commit()
+            return c.lastrowid
+
+    def save_number_session(self, chat_id, number):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            created = int(time.time())
+            c.execute('INSERT INTO number_sessions (chat_id, number, created_at, expires_at) VALUES (?, ?, ?, ?)',
+                     (chat_id, number, created, created + 120))
+            conn.commit()
+            return c.lastrowid
+
+    def get_all_quiz_questions(self):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT value FROM settings WHERE key = "quiz_questions"').fetchone()
+            return json.loads(r[0]) if r else QUIZ_QUESTIONS
+
+    def get_all_emoji_questions(self):
+        with self._get_connection() as conn:
+            r = conn.cursor().execute('SELECT value FROM settings WHERE key = "emoji_questions"').fetchone()
+            return json.loads(r[0]) if r else EMOJI_QUESTIONS
+
+    def is_user_banned(self, user_id):
+        with self._get_connection() as conn:
+            return conn.cursor().execute('SELECT user_id FROM bans WHERE user_id = ?', (user_id,)).fetchone() is not None
+
+    def ban_user(self, user_id, reason=None):
+        with self._get_connection() as conn:
+            conn.cursor().execute('INSERT OR REPLACE INTO bans (user_id, reason, banned_at) VALUES (?, ?, ?)',
+                                 (user_id, reason or 'No reason provided', int(time.time())))
+            conn.commit()
+
+    def unban_user(self, user_id):
+        with self._get_connection() as conn:
+            conn.cursor().execute('DELETE FROM bans WHERE user_id = ?', (user_id,))
+            conn.commit()
+
+    def get_all_users(self):
+        with self._get_connection() as conn:
+            return [{'user_id': r[0], 'username': r[1], 'first_name': r[2], 'coins': r[3], 'level': r[4]}
+                    for r in conn.cursor().execute('SELECT user_id, username, first_name, coins, level FROM users').fetchall()]
+
+    def get_all_groups(self):
+        with self._get_connection() as conn:
+            return [{'group_id': r[0], 'group_name': r[1], 'group_claimed': r[2] == 1, 'member_count': r[3]}
+                    for r in conn.cursor().execute('SELECT group_id, group_name, group_claimed, member_count FROM groups').fetchall()]
+
+    def update_group_info(self, group_id, group_name=None, member_count=None):
+        with self._get_connection() as conn:
+            c = conn.cursor()
+            if group_name and member_count:
+                c.execute('INSERT OR REPLACE INTO groups (group_id, group_name, member_count) VALUES (?, ?, ?)',
+                         (group_id, group_name, member_count))
+            elif group_name:
+                c.execute('INSERT OR REPLACE INTO groups (group_id, group_name) VALUES (?, ?)', (group_id, group_name))
+            elif member_count:
+                c.execute('INSERT OR REPLACE INTO groups (group_id, member_count) VALUES (?, ?)', (group_id, member_count))
+            conn.commit()
+
+    def get_top_users_by_coins(self, limit=10):
+        with self._get_connection() as conn:
+            return [{'user_id': r[0], 'username': r[1], 'coins': r[2], 'level': r[3], 'first_name': r[4]}
+                    for r in conn.cursor().execute('SELECT user_id, username, coins, level, first_name FROM users ORDER BY coins DESC LIMIT ?', (limit,)).fetchall()]
 
 db = Database()
 
-# ========== RANK SYSTEM ==========
-RANKS = [
-    ('Bronze I', 0),
-    ('Bronze II', 50),
-    ('Bronze III', 150),
-    ('Bronze IV', 300),
-    ('Silver I', 500),
-    ('Silver II', 800),
-    ('Silver III', 1200),
-    ('Silver IV', 1700),
-    ('Gold I', 2300),
-    ('Gold II', 3000),
-    ('Gold III', 3800),
-    ('Gold IV', 4700),
-    ('Platinum I', 5700),
-    ('Platinum II', 6800),
-    ('Platinum III', 8000),
-    ('Platinum IV', 9300),
-    ('Diamond I', 10700),
-    ('Diamond II', 12200),
-    ('Diamond III', 13800),
-    ('Diamond IV', 15500),
-    ('Master I', 17300),
-    ('Master II', 19200),
-    ('Master III', 21200),
-    ('Master IV', 23300),
-    ('Grandmaster I', 25500),
-    ('Grandmaster II', 27800),
-    ('Grandmaster III', 30200),
-    ('Grandmaster IV', 32700),
-    ('Zynox Legend', 35300),
-    ('Zynox Mythic', 38000),
-    ('Zynox Immortal', 40800),
-    ('Zynox God', 43700),
-]
+# ============== GAME MANAGER ==============
+game_manager = {}
 
-def get_rank_from_aura(aura):
-    for rank_name, threshold in reversed(RANKS):
-        if aura >= threshold:
-            return rank_name
-    return RANKS[0][0]
+def create_game(chat_id, game_type, player1_id, player2_id=None):
+    session_id = db.save_game_session(chat_id, game_type, player1_id, player2_id)
+    game_manager[session_id] = {
+        'chat_id': chat_id, 'game_type': game_type, 'player1_id': player1_id,
+        'player2_id': player2_id, 'moves': {}, 'state': 'waiting',
+        'created_at': time.time(), 'status': 'active'
+    }
+    return session_id
 
-def get_next_rank_aura(aura):
-    for rank_name, threshold in RANKS:
-        if aura < threshold:
-            return threshold
-    return None
+def get_game(session_id):
+    return game_manager.get(session_id)
 
-# ========== ROASTS ==========
-REJECT_ROASTS = [
-    "💀 Friendzone Express ne bina ticket ke wapas bhej diya.",
-    "📉 Aura gaya, proposal gaya.",
-    "🚪 Dil ka darwaza band mila.",
-    "⚠️ Better luck next season.",
-    "😬 Rejection ka taste kaisa laga?",
-    "💔 Dil toot gaya? Aura bhi toot gaya.",
-    "🤡 Clown moment ho gaya.",
-    "🎭 Acting class ki zaroorat hai.",
-]
+def update_game(session_id, **kwargs):
+    if session_id in game_manager:
+        for k, v in kwargs.items():
+            if k == 'moves' and isinstance(v, dict):
+                game_manager[session_id]['moves'].update(v)
+            else:
+                game_manager[session_id][k] = v
+        db.update_game_session(session_id, **kwargs)
 
-SINGLE_DIVORCE = [
-    "🤨 Teri shaadi kab hui thi jo divorce lene aa gaya?",
-    "📜 Records me spouse mila hi nahi.",
-    "😶 Single ho aur divorce maang rahe ho?",
-    "💀 Bhai tu toh single hai!",
-    "🤔 Divorce ka option sirf married logon ke liye hai.",
-]
+def remove_game(session_id):
+    if session_id in game_manager:
+        del game_manager[session_id]
+        db.update_game_session(session_id, status='completed')
 
-# ========== HELPERS ==========
-def format_aura(aura):
-    return f"{aura:,}"
+# ============== HELPERS ==============
+def format_number(num): return f"{num:,}"
+def format_time(seconds):
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    return f"{h}h {m}m" if h > 0 else f"{m}m"
 
-def create_vip_message(title, content, footer="🌌 Keep building your Aura."):
-    return f"""
-╔════════════════════╗
-{title}
-╚════════════════════╝
+def get_rank_from_coins(coins):
+    for r in reversed(RANKS):
+        if coins >= r['threshold']: return r['name']
+    return RANKS[0]['name']
 
-{content}
+def is_owner(user_id): return user_id == OWNER_ID
+def is_group(chat_type): return chat_type in ['group', 'supergroup']
 
-━━━━━━━━━━━━━━━━━━
-{footer}
-"""
+def check_banned(user_id):
+    if db.is_user_banned(user_id):
+        raise ValueError("You are banned from using this bot.")
 
-def is_admin_in_group(message):
-    """Check if user is admin in the group"""
-    try:
-        member = bot.get_chat_member(message.chat.id, message.from_user.id)
-        return member.status in ['administrator', 'creator']
-    except:
-        return False
-
-def is_bot_admin_in_group(chat_id):
-    """Check if bot is admin in the group"""
-    try:
-        bot_member = bot.get_chat_member(chat_id, bot.get_me().id)
-        return bot_member.status in ['administrator', 'creator']
-    except:
-        return False
-
-def is_user_in_group(user_id, group_id):
-    try:
-        member = bot.get_chat_member(group_id, user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
-
-def check_support_membership(user_id):
-    try:
-        # Extract group and channel IDs from links
-        group_id = SUPPORT_GROUP.split('/')[-1]
-        channel_id = SUPPORT_CHANNEL.split('/')[-1]
-        
-        # Check if user is in support group
-        group_member = bot.get_chat_member(group_id, user_id)
-        channel_member = bot.get_chat_member(channel_id, user_id)
-        return group_member.status in ['member', 'administrator', 'creator'] and \
-               channel_member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
-
-# ========== START COMMAND ==========
+# ============== START - DM ONLY ==============
 @bot.message_handler(commands=['start'])
-def start_command(message):
+def handle_start(message):
     user_id = message.from_user.id
-    
-    # Add user to database
-    db.add_user(
-        user_id,
-        message.from_user.username or '',
-        message.from_user.first_name
-    )
-    
-    # Check if user is in DM
-    if message.chat.type == 'group' or message.chat.type == 'supergroup':
-        # Group message
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🚀 Open Zynox Gaming", url=f"https://t.me/{bot.get_me().username}"))
-        bot.reply_to(message, "📩 Please start Zynox Gaming in DM first.", reply_markup=markup)
+    if is_group(message.chat.type):
+        bot.reply_to(message, "⚠️ Please use /start in private chat with the bot.")
         return
     
-    # DM start
-    user = db.get_user(user_id)
-    aura = user[3] if user else 0
-    rank = user[4] if user else 'Bronze I'
-    streak = user[5] if user else 0
-    is_married = user[6] if user else 0
-    partner_id = user[7] if user else None
-    
-    # Get partner name if married
-    partner_name = "Single"
-    if is_married and partner_id:
-        partner = db.get_user(partner_id)
-        if partner:
-            partner_name = partner[2] or "Unknown"
-    
-    # Send welcome media if available
-    media_id = db.get_media('welcome')
-    if media_id:
-        try:
-            bot.send_animation(user_id, media_id)
-        except:
-            pass
-    
-    content = f"""
-📊 YOUR STATS
-
-⚡ Aura: {format_aura(aura)}
-🏅 Rank: {rank}
-🔥 Streak: {streak} Days
-💍 Status: {"💍 Married" if is_married else "💔 Single"}
-
-━━━━━━━━━━━━━━━━━━
-
-👇 CHOOSE AN OPTION BELOW
-"""
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🍀 ZYNOX FEATURES", callback_data="features"),
-        types.InlineKeyboardButton("👥 GROUPS", callback_data="groups"),
-        types.InlineKeyboardButton("💎 PROFILE", callback_data="profile"),
-        types.InlineKeyboardButton("📢 UPDATES", callback_data="updates"),
-        types.InlineKeyboardButton("🎮 GAMES", callback_data="games"),
-        types.InlineKeyboardButton("➕ ADD ME TO YOUR GROUP", callback_data="add_bot")
-    )
-    
-    bot.send_message(
-        user_id,
-        f"💙 HIEEEE × ZYNOX GAMING ×\n\nA GAMING & CHATTING BOT HAVING LOTS OF FEATURES TO ENGAGE YOUR GROUP.\n\n{content}",
-        reply_markup=markup
-    )
-    
-    # Send notification to owner for first time users
-    if not user:
-        owner_markup = types.InlineKeyboardMarkup()
-        owner_markup.add(types.InlineKeyboardButton("👤 View Profile", callback_data=f"admin_view_{user_id}"))
-        
-        bot.send_message(
-            OWNER_ID,
-            f"🚀 NEW USER STARTED ZYNOX\n\n"
-            f"👤 Name: {message.from_user.first_name}\n"
-            f"🆔 ID: {user_id}\n"
-            f"📛 Username: @{message.from_user.username or 'No Username'}\n\n"
-            f"✅ User Registered",
-            reply_markup=owner_markup
-        )
-
-# ========== CALLBACK QUERY HANDLER ==========
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    user_id = call.from_user.id
-    data = call.data
-    
-    if data == "features":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_start"))
-        try:
-            bot.edit_message_text(
-                "⚡ ZYNOX FEATURES\n\n"
-                "⚡ Aura Economy\n"
-                "🏆 Rank System\n"
-                "🎮 Mini Games\n"
-                "💍 Relationship System\n"
-                "🫂 Friendship System\n"
-                "🎁 Daily Rewards\n"
-                "🧠 Random Quiz\n"
-                "🎯 Daily Tasks\n"
-                "🏅 Achievements\n"
-                "🏆 Leaderboards\n"
-                "🎭 Custom Media",
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup
-            )
-        except:
-            bot.answer_callback_query(call.id, "Please use /start to see the menu.")
-    
-    elif data == "groups":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("👥 Support Group", url=SUPPORT_GROUP),
-            types.InlineKeyboardButton("📢 Support Channel", url=SUPPORT_CHANNEL),
-            types.InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
-        )
-        try:
-            bot.edit_message_text(
-                "👥 ZYNOX COMMUNITY\n\n"
-                "Join our official communities:\n\n"
-                "👥 Support Group - Get help and connect with others\n"
-                "📢 Support Channel - Latest updates and announcements",
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup
-            )
-        except:
-            bot.answer_callback_query(call.id, "Please use /start to see the menu.")
-    
-    elif data == "profile":
-        try:
-            profile_command(call.message)
-            bot.answer_callback_query(call.id)
-        except:
-            bot.answer_callback_query(call.id, "Please use /profile command.")
-    
-    elif data == "updates":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_start"))
-        try:
-            bot.edit_message_text(
-                "📢 ZYNOX UPDATES\n\n"
-                "Stay tuned for the latest updates!\n"
-                "Join our Support Channel for announcements.",
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup
-            )
-        except:
-            bot.answer_callback_query(call.id, "Please use /start to see the menu.")
-    
-    elif data == "games":
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🎲 Dice", callback_data="game_dice"),
-            types.InlineKeyboardButton("✊ RPS", callback_data="game_rps"),
-            types.InlineKeyboardButton("🧠 Quiz", callback_data="game_quiz"),
-            types.InlineKeyboardButton("🎯 Guess", callback_data="game_guess"),
-            types.InlineKeyboardButton("🔢 Math", callback_data="game_math"),
-            types.InlineKeyboardButton("🎰 Slots", callback_data="game_slots"),
-            types.InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
-        )
-        try:
-            bot.edit_message_text(
-                "🎮 ZYNOX GAMES\n\n"
-                "Choose a game to play and earn Aura!",
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup
-            )
-        except:
-            bot.answer_callback_query(call.id, "Please use /start to see the menu.")
-    
-    elif data == "add_bot":
-        bot.answer_callback_query(call.id, "Add Zynox Gaming to your group from the bot's profile!")
-    
-    elif data == "back_to_start":
-        try:
-            start_command(call.message)
-        except:
-            bot.send_message(call.message.chat.id, "Please use /start to see the menu.")
-    
-    elif data.startswith("game_"):
-        game_name = data.replace("game_", "")
-        if game_name == "dice":
-            game_dice(call.message)
-        elif game_name == "rps":
-            game_rps(call.message)
-        elif game_name == "quiz":
-            game_quiz(call.message)
-        elif game_name == "guess":
-            game_guess(call.message)
-        elif game_name == "math":
-            game_math(call.message)
-        elif game_name == "slots":
-            game_slots(call.message)
-        else:
-            bot.answer_callback_query(call.id, f"🎮 {game_name.upper()} game coming soon!")
-    
-    elif data.startswith("marry_"):
-        target_id = int(data.split("_")[1])
-        handle_marriage_response(call, target_id, 'accept')
-    
-    elif data.startswith("reject_"):
-        target_id = int(data.split("_")[1])
-        handle_marriage_response(call, target_id, 'reject')
-    
-    elif data.startswith("divorce_accept_"):
-        partner_id = int(data.split("_")[2])
-        handle_divorce_response(call, partner_id, 'accept')
-    
-    elif data.startswith("divorce_stay_"):
-        partner_id = int(data.split("_")[2])
-        handle_divorce_response(call, partner_id, 'stay')
-    
-    elif data.startswith("admin_view_"):
-        target_id = int(data.split("_")[2])
-        if user_id == OWNER_ID:
-            view_user_profile(call, target_id)
-    
-    elif data.startswith("set_"):
-        settings_callback_handler(call)
-
-# ========== PROFILE COMMAND ==========
-@bot.message_handler(commands=['profile'])
-def profile_command(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    aura = user[3]
-    rank = user[4]
-    streak = user[5]
-    is_married = user[6]
-    partner_id = user[7]
-    messages = user[8] or 0
-    quiz_wins = user[9] or 0
-    game_wins = user[10] or 0
-    achievements = json.loads(user[11]) if user[11] else []
-    
-    # Get partner name
-    partner_name = "Single"
-    if is_married and partner_id:
-        partner = db.get_user(partner_id)
-        if partner:
-            partner_name = partner[2] or "Unknown"
-    
-    # Get global rank
-    db.cursor.execute('SELECT COUNT(*) + 1 FROM users WHERE aura > ?', (aura,))
-    global_rank = db.cursor.fetchone()[0]
-    
-    content = f"""
-🏷️ Name: {message.from_user.first_name}
-
-⚡ Aura: {format_aura(aura)}
-🏅 Rank: {rank}
-
-🌍 Global Rank: #{global_rank}
-👥 Group Rank: #Coming Soon
-
-🔥 Streak: {streak} Days
-
-💍 Partner: {partner_name}
-💙 Best Friend: Not Set
-
-💬 Messages: {messages}
-🧠 Quiz Wins: {quiz_wins}
-🎮 Game Wins: {game_wins}
-
-🏅 Achievements: {len(achievements)}
-
-━━━━━━━━━━━━━━━━━━
-🌌 Keep building your Aura.
-"""
-    
-    media_id = db.get_media('profile')
-    if media_id:
-        try:
-            bot.send_animation(user_id, media_id)
-        except:
-            pass
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_start"))
-    
-    bot.send_message(user_id, create_vip_message("👤 PROFILE", content), reply_markup=markup)
-
-def view_user_profile(call, target_id):
-    user = db.get_user(target_id)
-    if not user:
-        try:
-            bot.edit_message_text("User not found.", call.message.chat.id, call.message.message_id)
-        except:
-            pass
-        return
-    
-    content = f"""
-👤 USER PROFILE
-
-🏷️ Name: {user[2] or 'Unknown'}
-🆔 ID: {user[0]}
-⚡ Aura: {format_aura(user[3])}
-🏅 Rank: {user[4]}
-🔥 Streak: {user[5]} Days
-💍 Married: {"Yes" if user[6] else "No"}
-💬 Messages: {user[8] or 0}
-🧠 Quiz Wins: {user[9] or 0}
-🎮 Game Wins: {user[10] or 0}
-"""
     try:
-        bot.edit_message_text(
-            content,
-            call.message.chat.id,
-            call.message.message_id
-        )
-    except:
-        pass
+        check_banned(user_id)
+        user = db.get_user(user_id, message.from_user.username or '', message.from_user.first_name or 'User')
+        
+        welcome = f"""🎮 <b>WELCOME TO ZYNOX GAMING</b> 🎮
 
-# ========== DAILY CLAIM ==========
-@bot.message_handler(commands=['claim'])
-def claim_command(message):
+👤 Welcome, {user['first_name']}!
+
+<b>🌟 Premium Gaming Experience</b>
+
+🎯 <b>GAMES</b>
+Play exciting games and earn coins!
+Blackjack, Card, Dice, RPS & more!
+
+💰 <b>ECONOMY</b>
+Earn coins through games and daily claims
+Rob other players (if you dare!)
+Protect your hard-earned coins
+
+🏆 <b>RANK & LEVEL</b>
+• Rank based on coin balance
+• Level up through activity & XP
+
+⚔️ <b>FEATURES</b>
+• PvP & PvE game modes
+• Global & Group leaderboards
+
+📊 <b>YOUR STATS</b>
+💰 Coins: {format_number(user['coins'])}
+🏅 Rank: {get_rank_from_coins(user['coins'])}
+⭐ Level: {user['level']}
+🎮 Games: {user['total_games']}
+
+🎮 Ready to play? Choose an option below!"""
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
+        markup.add(types.InlineKeyboardButton("📚 HELP", callback_data="menu_help"),
+                   types.InlineKeyboardButton("📢 SUPPORT", callback_data="menu_support"))
+        
+        bot.send_photo(user_id, "https://i.imgur.com/placeholder.png", caption=welcome, reply_markup=markup)
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
+
+# ============== HELP - DM ONLY ==============
+@bot.message_handler(commands=['help'])
+def handle_help(message):
+    if is_group(message.chat.type):
+        bot.reply_to(message, "⚠️ Please use /help in private chat with the bot.")
+        return
+    show_help_menu(message.from_user.id)
+
+def show_help_menu(user_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("🎮 GAMES", callback_data="help_games"),
+               types.InlineKeyboardButton("💰 ECONOMY", callback_data="help_economy"))
+    markup.add(types.InlineKeyboardButton("👤 PROFILE", callback_data="help_profile"))
+    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="menu_main"))
+    bot.send_message(user_id, "📚 <b>ZYNOX HELP MENU</b>\n\nSelect a category:", reply_markup=markup)
+
+def show_games_help(user_id):
+    text = """🎮 <b>GAME COMMANDS</b>
+
+🃏 /blackjack - Play Blackjack vs Bot (50 coins)
+🃏 /card - Higher Card Challenge (20 coins)
+🎲 /dice - Dice Duel (25 coins)
+🪙 /coinflip - Coin Flip (15 coins)
+✂️ /rps - Rock Paper Scissors (20 coins)
+⭕ /tictactoe - Tic Tac Toe (40 coins)
+⚡ /fasttype - Fast Type Challenge (35 coins)
+❓ /quiz - Quiz Challenge (30 coins)
+😀 /emoji - Emoji Guess (25 coins)
+🔢 /guess - Number Guess (20 coins)
+
+<b>📌 PvP:</b> Reply to user with /game"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="help_menu"))
+    bot.send_message(user_id, text, reply_markup=markup)
+
+def show_economy_help(user_id):
+    text = """💰 <b>ECONOMY COMMANDS</b>
+
+<b>/bal</b> - Check balance
+<b>/claim</b> - Daily or group claim
+<b>/rob</b> - Rob other users (max 10,000)
+<b>/protect</b> - 24-hour protection
+<b>/leaderboard</b> - Global ranking
+<b>/grouprank</b> - Group ranking"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="help_menu"))
+    bot.send_message(user_id, text, reply_markup=markup)
+
+def show_profile_help(user_id):
+    text = """👤 <b>PROFILE COMMANDS</b>
+
+<b>/profile</b> - View your gaming profile
+<b>/stats</b> - Detailed game statistics"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="help_menu"))
+    bot.send_message(user_id, text, reply_markup=markup)
+
+# ============== PROFILE ==============
+@bot.message_handler(commands=['profile'])
+def handle_profile(message):
     user_id = message.from_user.id
-    
-    # Check if in group
-    if message.chat.type == 'group' or message.chat.type == 'supergroup':
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💬 Open Zynox Gaming", url=f"https://t.me/{bot.get_me().username}"))
-        bot.reply_to(
-            message,
-            "🔒 AURA CLAIM LOCKED\n\nDaily Aura claim karne ke liye DM me claim karo.",
-            reply_markup=markup
-        )
-        return
-    
-    # Check support membership
-    if not check_support_membership(user_id):
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("👥 Support Group", url=SUPPORT_GROUP),
-            types.InlineKeyboardButton("📢 Support Channel", url=SUPPORT_CHANNEL),
-            types.InlineKeyboardButton("🔄 Check Membership", callback_data="check_membership")
-        )
-        bot.send_message(
-            user_id,
-            "🔒 AURA LOCKED\n\n"
-            "Daily Aura claim karne ke liye dono communities join karo.\n\n"
-            f"👥 Support Group: {SUPPORT_GROUP}\n"
-            f"📢 Support Channel: {SUPPORT_CHANNEL}",
-            reply_markup=markup
-        )
-        return
-    
-    # Check if already claimed today
-    user = db.get_user(user_id)
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    db.cursor.execute('SELECT last_claim FROM users WHERE user_id = ?', (user_id,))
-    result = db.cursor.fetchone()
-    last_claim_date = result[0] if result else None
-    
-    today = datetime.now().date()
-    
-    if last_claim_date == str(today):
-        bot.reply_to(message, "🎁 You already claimed today! Come back tomorrow.")
-        return
-    
-    # Calculate random reward
-    reward = random.randint(100, 300)
-    
-    # Update user
-    db.update_aura(user_id, reward)
-    
-    # Update streak
-    if last_claim_date and (today - datetime.strptime(last_claim_date, '%Y-%m-%d').date()).days == 1:
-        db.update_streak(user_id)
-    else:
-        db.reset_streak(user_id)
-        db.update_streak(user_id)
-    
-    # Update last claim
-    db.cursor.execute('UPDATE users SET last_claim = ? WHERE user_id = ?', (today, user_id))
-    db.conn.commit()
-    
-    # Get updated rank
-    user = db.get_user(user_id)
-    aura = user[3]
-    rank = user[4]
-    streak = user[5]
-    next_rank = get_next_rank_aura(aura)
-    remaining = next_rank - aura if next_rank else 0
-    
-    # Send media
-    media_id = db.get_media('claim')
-    if media_id:
-        try:
-            bot.send_animation(user_id, media_id)
-        except:
-            pass
-    
-    content = f"""
-✨ Reward: +{reward} Aura
+    try:
+        check_banned(user_id)
+        user = db.get_user(user_id, message.from_user.username or '', message.from_user.first_name or 'User')
+        stats = db.get_user_game_stats(user_id)
+        
+        total_played = sum(s.get('played', 0) for s in stats.values())
+        total_wins = sum(s.get('wins', 0) for s in stats.values())
+        total_losses = sum(s.get('losses', 0) for s in stats.values())
+        win_rate = (total_wins / total_played * 100) if total_played > 0 else 0
+        
+        rank = get_rank_from_coins(user['coins'])
+        global_rank = db.get_global_rank(user_id)
+        protection = db.get_protection(user_id)
+        
+        text = f"""<b>{rank} PROFILE</b>
 
-🔥 Streak: {streak} Days
+👤 Name: {user['first_name']}
+📛 Username: @{user['username'] or 'N/A'}
 
+━━━━━━━━━━━━━━━━━
+💰 Coins: {format_number(user['coins'])}
 🏅 Rank: {rank}
+⭐ Level: {user['level']}
+✨ XP: {format_number(user['xp'])}
+━━━━━━━━━━━━━━━━━
 
-📈 Next Rank: {remaining} Aura Remaining
+📊 GAME STATISTICS
+🎮 Games: {total_played}
+✅ Wins: {total_wins}
+❌ Losses: {total_losses}
+📈 Win Rate: {win_rate:.1f}%
 
-🌌 Come back tomorrow.
-"""
-    bot.send_message(
-        user_id,
-        create_vip_message("🎁 DAILY AURA", content)
-    )
+🌍 Global Rank: #{global_rank}"""
+        
+        if protection[0]:
+            text += f"\n🛡️ Protected: ✅ ({format_time(protection[1])} remaining)"
+        else:
+            text += "\n🛡️ Protected: ❌"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📊 STATS", callback_data=f"view_stats_{user_id}"),
+                   types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
+        bot.send_message(message.chat.id, text, reply_markup=markup)
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
 
-# ========== MARRIAGE SYSTEM ==========
-@bot.message_handler(commands=['marry'])
-def marry_command(message):
+# ============== STATS ==============
+@bot.message_handler(commands=['stats'])
+def handle_stats(message):
     user_id = message.from_user.id
-    
-    # Parse target - works in both DM and Group
-    target_user = None
-    target_id = None
+    try:
+        check_banned(user_id)
+        user = db.get_user(user_id, message.from_user.username or '', message.from_user.first_name or 'User')
+        stats = db.get_user_game_stats(user_id)
+        
+        total_played = sum(s.get('played', 0) for s in stats.values())
+        total_wins = sum(s.get('wins', 0) for s in stats.values())
+        total_losses = sum(s.get('losses', 0) for s in stats.values())
+        win_rate = (total_wins / total_played * 100) if total_played > 0 else 0
+        
+        text = f"""📊 <b>GAME STATISTICS</b>
+
+👤 Player: {user['first_name']}
+
+━━━━━━━━━━━━━━━━━
+🎮 Total Games: {total_played}
+✅ Wins: {total_wins}
+❌ Losses: {total_losses}
+📈 Win Rate: {win_rate:.1f}%
+━━━━━━━━━━━━━━━━━
+
+<b>📋 PER-GAME STATS</b>"""
+        
+        games = {'blackjack': '🃏 Blackjack', 'card': '🃏 Card', 'dice': '🎲 Dice',
+                'coinflip': '🪙 Coin Flip', 'rps': '✂️ RPS', 'tictactoe': '⭕ Tic Tac Toe',
+                'fasttype': '⚡ Fast Type', 'quiz': '❓ Quiz', 'emoji': '😀 Emoji', 'guess': '🔢 Guess'}
+        
+        for key, name in games.items():
+            s = stats.get(key, {})
+            played = s.get('played', 0)
+            wins = s.get('wins', 0)
+            if played > 0:
+                text += f"\n{name}: {played} played, {wins} wins ({wins/played*100:.0f}%)"
+            else:
+                text += f"\n{name}: Not played yet"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("👤 PROFILE", callback_data=f"view_profile_{user_id}"),
+                   types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
+        bot.send_message(message.chat.id, text, reply_markup=markup)
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
+
+# ============== BALANCE ==============
+@bot.message_handler(commands=['bal'])
+def handle_balance(message):
+    user_id = message.from_user.id
+    target_id = user_id
     
     if message.reply_to_message:
         target_id = message.reply_to_message.from_user.id
-        target_user = message.reply_to_message.from_user
-    elif message.text and len(message.text.split()) > 1:
-        # Try to get user from mention
-        try:
-            target_username = message.text.split()[1].replace('@', '')
-            # Find user in chat
-            if message.chat.type == 'group' or message.chat.type == 'supergroup':
-                for member in bot.get_chat_members(message.chat.id):
-                    if member.user.username == target_username:
-                        target_id = member.user.id
-                        target_user = member.user
-                        break
-        except:
-            pass
     
-    if not target_id:
-        bot.reply_to(message, "💍 Reply to the person you want to marry with /marry\nOr use: /marry @username")
-        return
-    
-    # Prevent self marriage
-    if user_id == target_id:
-        bot.reply_to(message, "❌ You cannot marry yourself!")
-        return
-    
-    # Prevent bot marriage
-    if target_id == bot.get_me().id:
-        bot.reply_to(message, "❌ You cannot marry a bot!")
-        return
-    
-    # Check if user is already married
-    user_status = db.get_marriage_status(user_id)
-    if user_status and user_status[0] == 1:
-        partner_id = user_status[1]
-        partner = db.get_user(partner_id)
-        partner_name = partner[2] if partner else "Unknown"
-        bot.reply_to(
-            message,
-            f"🚨 CAUGHT IN 4K 🚨\n\n"
-            f"⚠️ Loyalty Test Failed Successfully.\n\n"
-            f"💍 Current Partner: {partner_name}\n"
-            f"👀 Proposal Attempt: You → @{target_user.username or 'Unknown' if target_user else 'Unknown'}\n\n"
-            f"🚔 Relationship Police ko inform kar diya gaya hai."
-        )
-        return
-    
-    # Check if target is already married
-    target_status = db.get_marriage_status(target_id)
-    if target_status and target_status[0] == 1:
-        bot.reply_to(message, "❌ That person is already married!")
-        return
-    
-    # Check cooldown - 1 hour
-    db.cursor.execute('''
-        SELECT timestamp FROM proposals 
-        WHERE proposer_id = ? AND status = 'pending'
-        ORDER BY timestamp DESC LIMIT 1
-    ''', (user_id,))
-    result = db.cursor.fetchone()
-    if result:
-        last_proposal = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
-        if (datetime.now() - last_proposal).seconds < 3600:
-            remaining = 3600 - (datetime.now() - last_proposal).seconds
-            minutes = remaining // 60
-            bot.reply_to(message, f"⏳ Please wait {minutes} minutes before sending another proposal.")
-            return
-    
-    # Add proposal
-    db.add_proposal(user_id, target_id)
-    
-    # Send proposal to target
-    target_name = target_user.first_name if target_user else "User"
-    proposer_name = message.from_user.first_name
-    
-    # Send media
-    media_id = db.get_media('proposal')
-    if media_id:
-        try:
-            bot.send_animation(target_id, media_id)
-        except:
-            pass
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("💖 Accept", callback_data=f"marry_{user_id}"),
-        types.InlineKeyboardButton("💔 Reject", callback_data=f"reject_{user_id}")
-    )
-    
-    # Send in DM to target if in group, or in chat if in DM
     try:
-        bot.send_message(
-            target_id,
-            f"💍 MARRIAGE PROPOSAL\n\n"
-            f"💌 @{message.from_user.username or 'User'} has proposed to you.\n\n"
-            f"Will you accept?\n\n"
-            f"⏳ Proposal expires in 5 minutes.",
-            reply_markup=markup
-        )
-    except:
-        bot.reply_to(message, "❌ Could not send proposal. Make sure the user has started the bot.")
-        return
-    
-    # Send confirmation to proposer
-    bot.reply_to(message, f"💌 Marriage proposal sent to @{target_user.username or 'Unknown'}!\n\n⏳ Waiting for response...")
+        check_banned(user_id)
+        user = db.get_user(target_id)
+        rank = get_rank_from_coins(user['coins'])
+        protection = db.get_protection(target_id)
+        global_rank = db.get_global_rank(target_id)
+        
+        text = f"""💰 <b>BALANCE</b>
 
-def handle_marriage_response(call, target_id, action):
-    user_id = call.from_user.id
-    
-    # Verify proposal
-    proposal = db.get_proposal(user_id)
-    if not proposal:
-        bot.answer_callback_query(call.id, "No pending proposal found.")
-        return
-    
-    proposer_id = proposal[0]
-    
-    # Check if proposal is valid (5 minutes expiry)
-    proposal_time = datetime.strptime(proposal[3], '%Y-%m-%d %H:%M:%S.%f')
-    if (datetime.now() - proposal_time).seconds > 300:
-        db.update_proposal_status(proposer_id, user_id, 'expired')
-        bot.answer_callback_query(call.id, "⏳ Proposal has expired.")
-        try:
-            bot.edit_message_text(
-                "⏳ Proposal expired.",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-        return
-    
-    if action == 'accept':
-        # Check if both users are still available
-        user_status = db.get_marriage_status(user_id)
-        if user_status and user_status[0] == 1:
-            bot.answer_callback_query(call.id, "❌ You are already married!")
-            return
+👤 User: {user['first_name']} (@{user['username'] or 'N/A'})
+💵 Coins: {format_number(user['coins'])}
+🏅 Rank: {rank}
+⭐ Level: {user['level']}
+🌍 Global Rank: #{global_rank}"""
         
-        proposer_status = db.get_marriage_status(proposer_id)
-        if proposer_status and proposer_status[0] == 1:
-            bot.answer_callback_query(call.id, "❌ Proposer is already married!")
-            return
+        if protection[0]:
+            text += f"\n🛡️ Protected: ✅ ({format_time(protection[1])} remaining)"
+        else:
+            text += "\n🛡️ Protected: ❌"
         
-        # Marry them
-        db.marry_users(user_id, proposer_id)
-        
-        # Update proposal status
-        db.update_proposal_status(proposer_id, user_id, 'accepted')
-        
-        # Send media
-        media_id = db.get_media('marry')
-        if media_id:
-            try:
-                bot.send_animation(user_id, media_id)
-                bot.send_animation(proposer_id, media_id)
-            except:
-                pass
-        
-        # Marriage success message
-        proposer = db.get_user(proposer_id)
-        target = db.get_user(user_id)
-        proposer_name = proposer[2] if proposer else "User"
-        target_name = target[2] if target else "User"
-        
-        success_msg = f"💍 MARRIAGE SUCCESS\n\n🎉 Congratulations!\n\n💖 {proposer_name} × {target_name}\n\n✨ Both received +100 Aura\n\n🌹 A new relationship has begun."
-        
-        # Add aura to both
-        db.update_aura(user_id, 100)
-        db.update_aura(proposer_id, 100)
-        
-        try:
-            bot.edit_message_text(
-                success_msg,
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-        
-        # Notify proposer
-        bot.send_message(proposer_id, success_msg)
-        
-        bot.answer_callback_query(call.id, "💖 Congratulations! You're married!")
-    
-    elif action == 'reject':
-        # Update proposal status
-        db.update_proposal_status(proposer_id, user_id, 'rejected')
-        
-        # Send rejection media
-        media_id = db.get_media('reject')
-        if media_id:
-            try:
-                bot.send_animation(user_id, media_id)
-                bot.send_animation(proposer_id, media_id)
-            except:
-                pass
-        
-        # Reject message
-        roast = random.choice(REJECT_ROASTS)
-        
-        # Proposer loses aura
-        db.update_aura(proposer_id, -100)
-        
-        try:
-            bot.edit_message_text(
-                f"💔 MARRIAGE REJECTED\n\n{roast}\n\n💔 {db.get_user(proposer_id)[2] or 'User'} lost -100 Aura",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-        
-        # Notify proposer
-        proposer = db.get_user(proposer_id)
-        bot.send_message(proposer_id, f"💔 Your proposal was rejected.\n\n{roast}")
-        
-        bot.answer_callback_query(call.id, "💔 Marriage rejected.")
+        bot.reply_to(message, text)
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
 
-# ========== DIVORCE SYSTEM ==========
-@bot.message_handler(commands=['divorce'])
-def divorce_command(message):
+# ============== LEADERBOARD ==============
+@bot.message_handler(commands=['leaderboard'])
+def handle_leaderboard(message):
+    user_id = message.from_user.id
+    try:
+        check_banned(user_id)
+        top = db.get_top_users_by_coins(10)
+        user = db.get_user(user_id)
+        
+        text = "🌍 <b>GLOBAL LEADERBOARD</b>\n\n"
+        medals = ['🥇', '🥈', '🥉']
+        for i, u in enumerate(top):
+            medal = medals[i] if i < 3 else f"#{i+1}"
+            text += f"{medal} @{u['username'] or 'User'} — {format_number(u['coins'])} coins\n"
+        
+        text += f"\n📊 Your Rank: #{db.get_global_rank(user_id)} (Coins: {format_number(user['coins'])})"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
+        bot.reply_to(message, text, reply_markup=markup)
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
+
+# ============== GROUP RANK ==============
+@bot.message_handler(commands=['grouprank'])
+def handle_group_rank(message):
+    if not is_group(message.chat.type):
+        bot.reply_to(message, "⚠️ This command can only be used in groups.")
+        return
+    bot.reply_to(message, "📊 Group ranking feature coming soon!")
+
+# ============== CLAIM ==============
+@bot.message_handler(commands=['claim'])
+def handle_claim(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    try:
+        check_banned(user_id)
+        
+        if is_group(message.chat.type):
+            if db.get_group_claim_status(chat_id):
+                bot.reply_to(message, "❌ <b>GROUP REWARD ALREADY CLAIMED</b>\n\nThis group has already received its one-time 10,000 coin reward.", parse_mode='HTML')
+                return
+            
+            try:
+                chat = bot.get_chat(chat_id)
+                member_count = chat.get_member_count() if hasattr(chat, 'get_member_count') else 0
+                if member_count < 500:
+                    bot.reply_to(message, f"❌ <b>GROUP REWARD LOCKED</b>\n\nThis group has {member_count} members.\nNeed at least 500 members.\n\n👥 Members: {member_count}/500", parse_mode='HTML')
+                    return
+            except: pass
+            
+            if db.claim_group_reward(chat_id, user_id):
+                try:
+                    chat = bot.get_chat(chat_id)
+                    db.update_group_info(chat_id, chat.title, chat.get_member_count() if hasattr(chat, 'get_member_count') else 0)
+                except: pass
+                
+                bot.reply_to(message, f"🎉 <b>GROUP REWARD CLAIMED!</b>\n\n👥 Group: {message.chat.title or 'This Group'}\n👤 Claimed By: @{message.from_user.username or 'N/A'}\n\n💰 +{format_number(GROUP_CLAIM_REWARD)} Coins", parse_mode='HTML')
+            else:
+                bot.reply_to(message, "❌ Failed to claim group reward.")
+        else:
+            can_claim, remaining = db.can_claim_daily(user_id)
+            
+            if not can_claim:
+                bot.reply_to(message, f"⏳ <b>DAILY CLAIM COOLDOWN</b>\n\nNext claim available in: {format_time(remaining)}", parse_mode='HTML')
+                return
+            
+            reward = db.claim_daily(user_id)
+            user = db.get_user(user_id)
+            bot.reply_to(message, f"🎉 <b>DAILY REWARD CLAIMED!</b>\n\n💰 +{format_number(reward)} Coins\n⭐ +{XP_REWARDS['claim']} XP\n\n📊 New Balance: {format_number(user['coins'])} coins\n🏅 Rank: {get_rank_from_coins(user['coins'])}\n⭐ Level: {user['level']}", parse_mode='HTML')
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
+
+# ============== PROTECT ==============
+@bot.message_handler(commands=['protect'])
+def handle_protect(message):
+    user_id = message.from_user.id
+    try:
+        check_banned(user_id)
+        protected, remaining = db.get_protection(user_id)
+        
+        if protected:
+            bot.reply_to(message, f"🛡️ <b>ALREADY PROTECTED</b>\n\n⏳ Remaining: {format_time(remaining)}\n\nYour coins are currently safe.", parse_mode='HTML')
+        else:
+            db.set_protection(user_id)
+            bot.reply_to(message, "🛡️ <b>PROTECTION ACTIVATED</b>\n\n⏰ Duration: 24 Hours\n\nYour coins are now protected from robbery.", parse_mode='HTML')
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
+
+# ============== ROB ==============
+@bot.message_handler(commands=['rob'])
+def handle_rob(message):
     user_id = message.from_user.id
     
-    user_status = db.get_marriage_status(user_id)
-    if not user_status or user_status[0] == 0:
-        bot.reply_to(message, random.choice(SINGLE_DIVORCE))
+    if not is_group(message.chat.type):
+        bot.reply_to(message, "⚠️ Rob command can only be used in groups.")
         return
     
-    partner_id = user_status[1]
-    partner = db.get_user(partner_id)
-    if not partner:
-        bot.reply_to(message, "❌ Partner not found.")
-        return
-    
-    # Add divorce request
-    db.add_divorce_request(user_id, partner_id)
-    
-    # Send request to partner
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("✅ Accept Divorce", callback_data=f"divorce_accept_{user_id}"),
-        types.InlineKeyboardButton("❌ Stay Married", callback_data=f"divorce_stay_{user_id}")
-    )
-    
-    # Send divorce media
-    media_id = db.get_media('divorce')
-    if media_id:
-        try:
-            bot.send_animation(partner_id, media_id)
-        except:
-            pass
-    
-    partner_name = partner[2] or "Partner"
-    bot.send_message(
-        partner_id,
-        f"💔 DIVORCE REQUEST\n\n"
-        f"@{message.from_user.username or 'User'} wants to end the relationship with you.\n\n"
-        f"What should happen?\n\n"
-        f"⏳ Request expires in 5 minutes.",
-        reply_markup=markup
-    )
-    
-    bot.reply_to(message, "💔 Divorce request sent to your partner.")
-
-def handle_divorce_response(call, partner_id, action):
-    user_id = call.from_user.id
-    
-    # Verify divorce request
-    request = db.get_divorce_request(user_id)
-    if not request:
-        bot.answer_callback_query(call.id, "No pending divorce request found.")
-        return
-    
-    proposer_id = request[0]
-    
-    # Check if request is valid (5 minutes expiry)
-    request_time = datetime.strptime(request[3], '%Y-%m-%d %H:%M:%S.%f')
-    if (datetime.now() - request_time).seconds > 300:
-        db.update_divorce_status(proposer_id, user_id, 'expired')
-        bot.answer_callback_query(call.id, "⏳ Divorce request has expired.")
-        try:
-            bot.edit_message_text(
-                "⏳ Divorce request expired.",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-        return
-    
-    if action == 'accept':
-        # Divorce them
-        db.divorce_users(user_id, proposer_id)
-        db.update_divorce_status(proposer_id, user_id, 'accepted')
-        
-        proposer = db.get_user(proposer_id)
-        target = db.get_user(user_id)
-        proposer_name = proposer[2] if proposer else "User"
-        target_name = target[2] if target else "User"
-        
-        try:
-            bot.edit_message_text(
-                f"💔 DIVORCE COMPLETE\n\n"
-                f"{proposer_name} × {target_name}\n\n"
-                "The relationship has ended.\n\n"
-                "💫 Both users are now Single.",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-        
-        # Notify proposer
-        bot.send_message(proposer_id, f"💔 Your divorce request has been accepted.\n\nYou are now single.")
-        
-        bot.answer_callback_query(call.id, "💔 Divorce complete.")
-    
-    elif action == 'stay':
-        db.update_divorce_status(proposer_id, user_id, 'rejected')
-        
-        try:
-            bot.edit_message_text(
-                "💍 DIVORCE REJECTED\n\n"
-                "The marriage continues.\n\n"
-                "❤️ Still Married.",
-                call.message.chat.id,
-                call.message.message_id
-            )
-        except:
-            pass
-        
-        # Notify proposer
-        bot.send_message(proposer_id, "💍 Your partner has chosen to stay married.")
-        
-        bot.answer_callback_query(call.id, "❤️ Marriage continues.")
-
-# ========== RELATIONSHIP COMMAND ==========
-@bot.message_handler(commands=['relationship'])
-def relationship_command(message):
-    user_id = message.from_user.id
-    user_status = db.get_marriage_status(user_id)
-    
-    if not user_status or user_status[0] == 0:
-        bot.reply_to(message, "💔 You are not in a relationship.")
-        return
-    
-    partner_id = user_status[1]
-    partner = db.get_user(partner_id)
-    if not partner:
-        bot.reply_to(message, "❌ Partner not found.")
-        return
-    
-    content = f"""
-❤️ Partner: {partner[2] or 'Unknown'}
-📅 Married Since: {datetime.now().strftime('%Y-%m-%d')}
-⏳ Duration: 1 Day
-💞 Status: Married
-"""
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("💔 Divorce", callback_data=f"divorce_{user_id}"),
-        types.InlineKeyboardButton("👤 Partner Profile", callback_data=f"admin_view_{partner_id}")
-    )
-    
-    bot.reply_to(
-        message,
-        create_vip_message("💍 RELATIONSHIP", content),
-        reply_markup=markup
-    )
-
-# ========== FRIENDSHIP COMMAND ==========
-@bot.message_handler(commands=['friendship'])
-def friendship_command(message):
     if not message.reply_to_message:
-        bot.reply_to(message, "🫂 Reply to someone with /friendship")
-        return
-    
-    target = message.reply_to_message.from_user
-    content = f"""
-🫂 FRIENDSHIP
-
-👤 {message.from_user.first_name}
-👤 {target.first_name}
-
-💙 Friendship: {random.randint(50, 95)}%
-💬 Interactions: {random.randint(100, 500)}
-📅 First Seen: {datetime.now().strftime('%Y-%m-%d')}
-🏷️ Level: 💙 Close Friends
-"""
-    
-    bot.reply_to(message, content)
-
-# ========== ROAST COMMAND ==========
-@bot.message_handler(commands=['roast'])
-def roast_command(message):
-    if not message.reply_to_message:
-        bot.reply_to(message, "😂 Reply to someone with /roast")
+        bot.reply_to(message, "⚠️ Reply to the user you want to rob with /rob")
         return
     
     target_id = message.reply_to_message.from_user.id
-    target_name = message.reply_to_message.from_user.first_name
     
-    roasts = [
-        f"😂 {target_name}, teri soch se zyada teri shakal roast hoti hai!",
-        f"🔥 {target_name}, tu toh vada pav ke bina bhi pav bhaji hai!",
-        f"💀 {target_name}, teri IQ se zyada teri height choti hai!",
-        f"🤡 {target_name}, tu toh comedy show ka permanent member hai!",
-        f"😤 {target_name}, teri shakal dekh ke lagta hai tu roj mirror todta hai!",
-        f"🤣 {target_name}, teri photo dekh ke police station mein complaint karte hain log!",
-    ]
+    if target_id == user_id:
+        bot.reply_to(message, "❌ You cannot rob yourself!")
+        return
     
-    roast = random.choice(roasts)
+    if target_id == OWNER_ID:
+        bot.reply_to(message, "❌ You cannot rob the bot owner!")
+        return
     
-    # Random Aura change
-    winner_aura = random.randint(5, 15)
-    loser_aura = random.randint(5, 15)
-    
-    db.update_aura(message.from_user.id, winner_aura)
-    db.update_aura(target_id, -loser_aura)
-    
-    bot.reply_to(
-        message,
-        f"😂 ROAST BATTLE\n\n{roast}\n\n🏆 Winner: {message.from_user.first_name} (+{winner_aura} Aura)\n💀 Loser: {target_name} (-{loser_aura} Aura)"
-    )
+    try:
+        check_banned(user_id)
+        
+        protected, remaining = db.get_protection(target_id)
+        if protected:
+            bot.reply_to(message, f"❌ <b>ROB FAILED</b>\n\n🛡️ @{message.reply_to_message.from_user.username or 'User'} is protected.\n\n⏳ Protection remaining: {format_time(remaining)}", parse_mode='HTML')
+            return
+        
+        target = db.get_user(target_id)
+        if target['coins'] <= 0:
+            bot.reply_to(message, "❌ This user has no coins to rob!")
+            return
+        
+        rob_amount = random.randint(100, min(ROB_MAX_AMOUNT, target['coins']))
+        
+        db.update_user_coins(target_id, -rob_amount)
+        db.update_user_coins(user_id, rob_amount)
+        
+        robber = db.get_user(user_id)
+        bot.reply_to(message, f"✅ <b>ROB SUCCESSFUL!</b>\n\n👤 Robber: @{message.from_user.username or 'N/A'}\n🎯 Target: @{message.reply_to_message.from_user.username or 'N/A'}\n\n💰 Stolen: {format_number(rob_amount)} coins\n\n📊 Robber's Balance: {format_number(robber['coins'])} coins\n📊 Target's Balance: {format_number(target['coins'] - rob_amount)} coins", parse_mode='HTML')
+    except Exception as e:
+        bot.send_message(user_id, f"❌ Error: {e}")
 
-# ========== GAMES ==========
+# ============== GAMES ==============
 
-# Dice Game
+# Blackjack
+@bot.message_handler(commands=['blackjack'])
+def handle_blackjack(message):
+    user_id = message.from_user.id
+    
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        if target_id == user_id:
+            bot.reply_to(message, "❌ You cannot play against yourself!")
+            return
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("✅ Accept", callback_data=f"bj_accept_{user_id}_{target_id}"),
+                   types.InlineKeyboardButton("❌ Decline", callback_data=f"bj_decline_{user_id}_{target_id}"))
+        bot.reply_to(message, f"🎯 <b>BLACKJACK CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['blackjack']} coins", reply_markup=markup)
+    else:
+        # Bot mode
+        suits = ['♠', '♥', '♦', '♣']
+        values = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
+        
+        def get_card(): return random.choice(values) + random.choice(suits)
+        def card_value(c):
+            v = c[:-1]
+            if v.isdigit(): return int(v)
+            if v in ['J','Q','K']: return 10
+            return 11
+        def hand_total(hand):
+            total = sum(card_value(c) for c in hand)
+            aces = sum(1 for c in hand if c.startswith('A'))
+            while total > 21 and aces > 0:
+                total -= 10
+                aces -= 1
+            return total
+        
+        player_cards = [get_card(), get_card()]
+        bot_cards = [get_card(), get_card()]
+        
+        session_id = create_game(message.chat.id, 'blackjack', user_id)
+        update_game(session_id, state='playing', moves={'player_cards': player_cards, 'bot_cards': bot_cards, 'player_total': hand_total(player_cards), 'bot_total': hand_total(bot_cards)})
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("➕ HIT", callback_data=f"bj_hit_{session_id}"),
+                   types.InlineKeyboardButton("✋ STAND", callback_data=f"bj_stand_{session_id}"))
+        
+        bot.reply_to(message, f"🃏 <b>BLACKJACK</b>\n\n👤 Your Hand: {' '.join(player_cards)} = {hand_total(player_cards)}\n🤖 Bot Hand: {bot_cards[0]} ?\n\nChoose your action:", reply_markup=markup)
+
+# Card
+@bot.message_handler(commands=['card'])
+def handle_card(message):
+    user_id = message.from_user.id
+    
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        if target_id == user_id:
+            bot.reply_to(message, "❌ You cannot play against yourself!")
+            return
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("✅ Accept", callback_data=f"card_accept_{user_id}_{target_id}"),
+                   types.InlineKeyboardButton("❌ Decline", callback_data=f"card_decline_{user_id}_{target_id}"))
+        bot.reply_to(message, f"🎯 <b>CARD CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['card']} coins", reply_markup=markup)
+    else:
+        suits = ['♠', '♥', '♦', '♣']
+        values = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
+        def get_card(): return random.choice(values) + random.choice(suits)
+        def card_value(c):
+            v = c[:-1]
+            if v.isdigit(): return int(v)
+            if v in ['J','Q','K']: return 10
+            return 11
+        
+        player = get_card()
+        bot_card = get_card()
+        p_val, b_val = card_value(player), card_value(bot_card)
+        
+        if p_val > b_val:
+            db.update_user_coins(user_id, GAME_REWARDS['card'])
+            db.update_user_xp(user_id, XP_REWARDS['win'])
+            db.update_game_stats(user_id, 'card', 'win')
+            result = f"🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['card']} coins"
+        elif p_val < b_val:
+            db.update_game_stats(user_id, 'card', 'loss')
+            result = "❌ <b>YOU LOSE!</b>\nBetter luck next time!"
+        else:
+            db.update_game_stats(user_id, 'card', 'draw')
+            result = "🤝 <b>IT'S A TIE!</b>"
+        
+        bot.reply_to(message, f"🃏 <b>HIGHER CARD</b>\n\n👤 Your Card: {player} = {p_val}\n🤖 Bot Card: {bot_card} = {b_val}\n\n{result}")
+
+# Dice
 @bot.message_handler(commands=['dice'])
-def game_dice(message):
+def handle_dice(message):
     user_id = message.from_user.id
-    user = db.get_user(user_id)
     
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    # Check cooldown (30 seconds)
-    if hasattr(game_dice, 'cooldown') and user_id in game_dice.cooldown:
-        if (datetime.now() - game_dice.cooldown[user_id]).seconds < 30:
-            bot.reply_to(message, "⏳ Please wait 30 seconds before rolling again.")
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        if target_id == user_id:
+            bot.reply_to(message, "❌ You cannot play against yourself!")
             return
-    
-    # Roll dice
-    user_roll = random.randint(1, 6)
-    bot_roll = random.randint(1, 6)
-    
-    if user_roll > bot_roll:
-        reward = random.randint(10, 30)
-        db.update_aura(user_id, reward)
-        result = f"🎉 You win! +{reward} Aura"
-    elif user_roll < bot_roll:
-        loss = random.randint(5, 15)
-        db.update_aura(user_id, -loss)
-        result = f"😔 You lose! -{loss} Aura"
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("✅ Accept", callback_data=f"dice_accept_{user_id}_{target_id}"),
+                   types.InlineKeyboardButton("❌ Decline", callback_data=f"dice_decline_{user_id}_{target_id}"))
+        bot.reply_to(message, f"🎯 <b>DICE CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['dice']} coins", reply_markup=markup)
     else:
-        result = "🤝 It's a tie! No Aura lost or gained."
-    
-    # Save cooldown
-    if not hasattr(game_dice, 'cooldown'):
-        game_dice.cooldown = {}
-    game_dice.cooldown[user_id] = datetime.now()
-    
-    content = f"""
-🎲 DICE GAME
+        player = random.randint(1, 6)
+        bot_roll = random.randint(1, 6)
+        
+        if player > bot_roll:
+            db.update_user_coins(user_id, GAME_REWARDS['dice'])
+            db.update_user_xp(user_id, XP_REWARDS['win'])
+            db.update_game_stats(user_id, 'dice', 'win')
+            result = f"🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['dice']} coins"
+        elif player < bot_roll:
+            db.update_game_stats(user_id, 'dice', 'loss')
+            result = "❌ <b>YOU LOSE!</b>\nBetter luck next time!"
+        else:
+            db.update_game_stats(user_id, 'dice', 'draw')
+            result = "🤝 <b>IT'S A TIE!</b>"
+        
+        bot.reply_to(message, f"🎲 <b>DICE DUEL</b>\n\n👤 Your Roll: 🎲 {player}\n🤖 Bot Roll: 🎲 {bot_roll}\n\n{result}")
 
-You rolled: 🎲 {user_roll}
-Bot rolled: 🎲 {bot_roll}
+# Coin Flip
+@bot.message_handler(commands=['coinflip'])
+def handle_coinflip(message):
+    user_id = message.from_user.id
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("🪙 HEADS", callback_data=f"cf_heads_{user_id}"),
+               types.InlineKeyboardButton("🪙 TAILS", callback_data=f"cf_tails_{user_id}"))
+    bot.reply_to(message, "🪙 <b>COIN FLIP</b>\n\nChoose heads or tails:", reply_markup=markup)
 
-{result}
-
-━━━━━━━━━━━━━━━━━━
-⚡ Aura: {format_aura(db.get_user(user_id)[3])}
-"""
-    bot.reply_to(message, content)
-
-# Rock Paper Scissors Game
+# RPS
 @bot.message_handler(commands=['rps'])
-def game_rps(message):
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    markup.add(
-        types.InlineKeyboardButton("🗿 Rock", callback_data="rps_rock"),
-        types.InlineKeyboardButton("📄 Paper", callback_data="rps_paper"),
-        types.InlineKeyboardButton("✂️ Scissors", callback_data="rps_scissors")
-    )
-    bot.reply_to(message, "✊ Choose your move:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('rps_'))
-def rps_callback(call):
-    user_id = call.from_user.id
-    user_choice = call.data.split('_')[1]
+def handle_rps(message):
+    user_id = message.from_user.id
     
-    choices = ['rock', 'paper', 'scissors']
-    bot_choice = random.choice(choices)
-    
-    emojis = {'rock': '🗿', 'paper': '📄', 'scissors': '✂️'}
-    
-    # Determine winner
-    if user_choice == bot_choice:
-        result = "🤝 It's a tie!"
-        aura_change = 0
-    elif (user_choice == 'rock' and bot_choice == 'scissors') or \
-         (user_choice == 'paper' and bot_choice == 'rock') or \
-         (user_choice == 'scissors' and bot_choice == 'paper'):
-        reward = random.randint(10, 25)
-        db.update_aura(user_id, reward)
-        result = f"🎉 You win! +{reward} Aura"
-        aura_change = reward
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        if target_id == user_id:
+            bot.reply_to(message, "❌ You cannot play against yourself!")
+            return
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("✅ Accept", callback_data=f"rps_accept_{user_id}_{target_id}"),
+                   types.InlineKeyboardButton("❌ Decline", callback_data=f"rps_decline_{user_id}_{target_id}"))
+        bot.reply_to(message, f"🎯 <b>RPS CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['rps']} coins", reply_markup=markup)
     else:
-        loss = random.randint(5, 10)
-        db.update_aura(user_id, -loss)
-        result = f"😔 You lose! -{loss} Aura"
-        aura_change = -loss
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_bot_rock_{user_id}"),
+                   types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_bot_paper_{user_id}"),
+                   types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_bot_scissors_{user_id}"))
+        bot.reply_to(message, "✂️ <b>ROCK PAPER SCISSORS</b>\n\nChoose your move:", reply_markup=markup)
+
+# Tic Tac Toe
+@bot.message_handler(commands=['tictactoe'])
+def handle_tictactoe(message):
+    user_id = message.from_user.id
     
-    content = f"""
-✊ ROCK PAPER SCISSORS
+    if not message.reply_to_message:
+        bot.reply_to(message, "⚠️ Reply to the user you want to challenge with /tictactoe")
+        return
+    
+    target_id = message.reply_to_message.from_user.id
+    if target_id == user_id:
+        bot.reply_to(message, "❌ You cannot play against yourself!")
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("✅ Accept", callback_data=f"ttt_accept_{user_id}_{target_id}"),
+               types.InlineKeyboardButton("❌ Decline", callback_data=f"ttt_decline_{user_id}_{target_id}"))
+    bot.reply_to(message, f"🎯 <b>TIC TAC TOE CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['tictactoe']} coins", reply_markup=markup)
 
-You: {emojis[user_choice]} {user_choice.title()}
-Bot: {emojis[bot_choice]} {bot_choice.title()}
+# Fast Type
+@bot.message_handler(commands=['fasttype'])
+def handle_fasttype(message):
+    word = random.choice(FAST_TYPE_WORDS)
+    db.save_fasttype_session(message.chat.id, word)
+    bot.reply_to(message, f"⚡ <b>FAST TYPE CHALLENGE</b>\n\nType this word first to win:\n\n📝 <code>{word}</code>\n\n💰 Winner: {GAME_REWARDS['fasttype']} coins", parse_mode='HTML')
 
-{result}
-
-━━━━━━━━━━━━━━━━━━
-⚡ Aura: {format_aura(db.get_user(user_id)[3])}
-"""
-    try:
-        bot.edit_message_text(content, call.message.chat.id, call.message.message_id)
-    except:
-        bot.send_message(call.message.chat.id, content)
-    bot.answer_callback_query(call.id)
-
-# Quiz Game
+# Quiz
 @bot.message_handler(commands=['quiz'])
-def game_quiz(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
+def handle_quiz(message):
+    questions = db.get_all_quiz_questions()
+    if not questions: questions = QUIZ_QUESTIONS
     
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
+    q = random.choice(questions)
+    q_id = questions.index(q)
+    session_id = db.save_quiz_session(message.chat.id, q_id, q['correct'])
     
-    # Get random quiz
-    quiz = db.get_random_quiz()
-    if not quiz:
-        bot.reply_to(message, "No quiz questions available.")
-        return
-    
-    # Store quiz in message for callback
-    options_text = ""
     markup = types.InlineKeyboardMarkup(row_width=2)
+    for i, opt in enumerate(q['options']):
+        markup.add(types.InlineKeyboardButton(opt, callback_data=f"quiz_answer_{session_id}_{i}"))
     
-    for i, option in enumerate(quiz['options']):
-        options_text += f"{chr(65+i)}. {option}\n"
-        markup.add(types.InlineKeyboardButton(
-            f"{chr(65+i)}. {option[:20]}",
-            callback_data=f"quiz_{quiz['id']}_{i}"
-        ))
+    bot.reply_to(message, f"❓ <b>QUIZ CHALLENGE</b>\n\n{q['question']}\n\n💰 Winner: {GAME_REWARDS['quiz']} coins", reply_markup=markup)
+
+# Emoji Guess
+@bot.message_handler(commands=['emoji'])
+def handle_emoji(message):
+    questions = db.get_all_emoji_questions()
+    if not questions: questions = EMOJI_QUESTIONS
     
-    content = f"""
-🧠 ZYNOX QUIZ
-
-❓ {quiz['question']}
-
-{options_text}
-
-⚡ First correct answer wins!
-"""
-    bot.reply_to(message, content, reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('quiz_'))
-def quiz_callback(call):
-    user_id = call.from_user.id
-    data = call.data.split('_')
-    quiz_id = int(data[1])
-    selected = int(data[2])
+    q = random.choice(questions)
+    q_id = questions.index(q)
+    db.save_emoji_session(message.chat.id, q_id, q['answer'])
     
-    # Get quiz
-    db.cursor.execute('SELECT * FROM quiz_questions WHERE id = ?', (quiz_id,))
-    result = db.cursor.fetchone()
-    
-    if not result:
-        bot.answer_callback_query(call.id, "Quiz expired.")
-        return
-    
-    quiz = {
-        'id': result[0],
-        'category': result[1],
-        'question': result[2],
-        'options': json.loads(result[3]),
-        'answer': result[4]
-    }
-    
-    if selected == quiz['answer']:
-        reward = random.randint(20, 50)
-        db.update_aura(user_id, reward)
-        db.cursor.execute('UPDATE users SET quiz_wins = quiz_wins + 1 WHERE user_id = ?', (user_id,))
-        db.conn.commit()
-        
-        content = f"""
-🏆 CORRECT!
+    bot.reply_to(message, f"😀 <b>EMOJI GUESS</b>\n\n{q['emojis']}\n\nGuess what this represents!\n\n💰 Winner: {GAME_REWARDS['emoji']} coins")
 
-🎉 @{call.from_user.username or 'User'} answered first.
-
-⚡ +{reward} Aura
-
-✅ Answer: {quiz['options'][quiz['answer']]}
-"""
-        try:
-            bot.edit_message_text(content, call.message.chat.id, call.message.message_id)
-        except:
-            bot.send_message(call.message.chat.id, content)
-        bot.answer_callback_query(call.id, "✅ Correct! +{reward} Aura")
-    else:
-        # Check if someone else answered correctly
-        if hasattr(quiz_callback, 'answered') and quiz_callback.answered.get(quiz_id, False):
-            bot.answer_callback_query(call.id, "❌ Already answered!")
-            return
-        
-        bot.answer_callback_query(call.id, "❌ Wrong answer! Try again.")
-
-# Guess Number Game
+# Number Guess
 @bot.message_handler(commands=['guess'])
-def game_guess(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    # Generate random number
-    number = random.randint(1, 10)
-    
-    markup = types.InlineKeyboardMarkup(row_width=5)
-    buttons = []
-    for i in range(1, 11):
-        buttons.append(types.InlineKeyboardButton(str(i), callback_data=f"guess_{number}_{i}"))
-    markup.add(*buttons)
-    
-    bot.reply_to(message, "🎯 Guess a number between 1 and 10:", reply_markup=markup)
+def handle_guess(message):
+    number = random.randint(1, 100)
+    db.save_number_session(message.chat.id, number)
+    bot.reply_to(message, f"🔢 <b>NUMBER GUESS</b>\n\nI'm thinking of a number between 1 and 100.\n\n💰 Winner: {GAME_REWARDS['guess']} coins")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('guess_'))
-def guess_callback(call):
+# ============== CALLBACKS ==============
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
     user_id = call.from_user.id
-    data = call.data.split('_')
-    number = int(data[1])
-    guessed = int(data[2])
-    
-    if guessed == number:
-        reward = random.randint(15, 35)
-        db.update_aura(user_id, reward)
-        content = f"🎯 CORRECT! The number was {number}\n\n⚡ +{reward} Aura"
-        try:
-            bot.edit_message_text(content, call.message.chat.id, call.message.message_id)
-        except:
-            bot.send_message(call.message.chat.id, content)
-        bot.answer_callback_query(call.id, f"✅ Correct! +{reward} Aura")
-    else:
-        bot.answer_callback_query(call.id, f"❌ Wrong! Try again.")
-
-# Math Battle Game
-@bot.message_handler(commands=['math'])
-def game_math(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    # Generate math problem
-    num1 = random.randint(1, 20)
-    num2 = random.randint(1, 20)
-    operator = random.choice(['+', '-', '*'])
-    
-    if operator == '+':
-        answer = num1 + num2
-    elif operator == '-':
-        answer = num1 - num2
-    else:
-        answer = num1 * num2
-    
-    # Store answer
-    if not hasattr(game_math, 'answers'):
-        game_math.answers = {}
-    game_math.answers[user_id] = answer
-    
-    content = f"""
-🔢 MATH BATTLE
-
-Solve: {num1} {operator} {num2} = ?
-
-Reply with: /mathanswer [number]
-
-⚡ First correct answer wins 20-50 Aura!
-"""
-    bot.reply_to(message, content)
-
-@bot.message_handler(commands=['mathanswer'])
-def math_answer(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    if not hasattr(game_math, 'answers') or user_id not in game_math.answers:
-        bot.reply_to(message, "No math question active. Use /math to start one.")
-        return
+    data = call.data
     
     try:
-        user_answer = int(message.text.split()[1])
-    except:
-        bot.reply_to(message, "❌ Please provide a number.\nExample: /mathanswer 15")
-        return
-    
-    correct_answer = game_math.answers[user_id]
-    
-    if user_answer == correct_answer:
-        reward = random.randint(20, 50)
-        db.update_aura(user_id, reward)
-        bot.reply_to(message, f"✅ CORRECT! +{reward} Aura")
-        del game_math.answers[user_id]
-    else:
-        bot.reply_to(message, f"❌ Wrong! The correct answer was {correct_answer}")
-
-# Slots Game
-@bot.message_handler(commands=['slots'])
-def game_slots(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
-        return
-    
-    # Check cooldown (10 seconds)
-    if hasattr(game_slots, 'cooldown') and user_id in game_slots.cooldown:
-        if (datetime.now() - game_slots.cooldown[user_id]).seconds < 10:
-            bot.reply_to(message, "⏳ Please wait 10 seconds before playing again.")
-            return
-    
-    emojis = ['🍒', '🍋', '🍊', '🍇', '💎', '7️⃣']
-    
-    slot1 = random.choice(emojis)
-    slot2 = random.choice(emojis)
-    slot3 = random.choice(emojis)
-    
-    # Check win
-    if slot1 == slot2 == slot3:
-        if slot1 == '7️⃣':
-            reward = random.randint(50, 100)
-        elif slot1 == '💎':
-            reward = random.randint(30, 60)
-        else:
-            reward = random.randint(15, 35)
-        db.update_aura(user_id, reward)
-        result = f"🎉 JACKPOT! +{reward} Aura"
-    elif slot1 == slot2 or slot2 == slot3 or slot1 == slot3:
-        reward = random.randint(5, 15)
-        db.update_aura(user_id, reward)
-        result = f"🎊 Two of a kind! +{reward} Aura"
-    else:
-        loss = random.randint(5, 10)
-        db.update_aura(user_id, -loss)
-        result = f"😔 No match! -{loss} Aura"
-    
-    # Save cooldown
-    if not hasattr(game_slots, 'cooldown'):
-        game_slots.cooldown = {}
-    game_slots.cooldown[user_id] = datetime.now()
-    
-    content = f"""
-🎰 SLOTS
-
-[{slot1}] [{slot2}] [{slot3}]
-
-{result}
-
-━━━━━━━━━━━━━━━━━━
-⚡ Aura: {format_aura(db.get_user(user_id)[3])}
-"""
-    bot.reply_to(message, content)
-
-# ========== GROUP MANAGEMENT COMMANDS ==========
-
-# WELCOME SYSTEM
-@bot.message_handler(content_types=['new_chat_members'])
-def welcome_new_members(message):
-    """Welcome new members to the group"""
-    for member in message.new_chat_members:
-        if member.id == bot.get_me().id:
-            # Bot added to group
-            # Setup default group settings
-            db.cursor.execute('''
-                INSERT OR IGNORE INTO group_settings (group_id)
-                VALUES (?)
-            ''', (message.chat.id,))
-            db.conn.commit()
-            
-            # Add group to database
-            db.add_group(message.chat.id, message.chat.title or "Unknown Group", message.from_user.id)
-            
-            # Give bonus to user who added bot
-            if not db.get_group_bonus(message.from_user.id, message.chat.id):
-                db.add_group_bonus(message.from_user.id, message.chat.id)
-                db.update_aura(message.from_user.id, 1000)
-                
-                # Get updated rank
-                user = db.get_user(message.from_user.id)
-                rank = user[4] if user else 'Bronze I'
-                
-                bot.send_message(
-                    message.chat.id,
-                    f"🎉 ZYNOX GROUP BONUS\n\n"
-                    f"👤 @{message.from_user.username or 'User'} added Zynox Gaming to a new group!\n\n"
-                    f"🎁 +1000 Aura\n"
-                    f"🏅 Current Rank: {rank}\n\n"
-                    f"🚀 Thanks for bringing Zynox to the community!"
-                )
-            
-            # Notify owner
-            bot.send_message(
-                OWNER_ID,
-                f"👥 BOT ADDED TO NEW GROUP\n\n"
-                f"📛 Group: {message.chat.title or 'Unknown'}\n"
-                f"🆔 ID: {message.chat.id}\n"
-                f"👤 Added By: @{message.from_user.username or 'User'}\n"
-                f"🆔 User ID: {message.from_user.id}\n\n"
-                f"✅ Group Registered"
-            )
-            return
+        check_banned(user_id)
         
-        # Check if welcome enabled
-        if db.get_group_setting(message.chat.id, 'welcome_enabled'):
-            welcome_media = db.get_media('welcome')
-            welcome_text = f"""
-╔════════════════════╗
-👋 WELCOME TO THE GROUP
-╚════════════════════╝
-
-🎮 Welcome {member.first_name}!
-
-━━━━━━━━━━━━━━━━━━
-🌟 Enjoy your stay and earn Aura!
-💡 Type /help for commands
-"""
-
-            if welcome_media:
-                try:
-                    bot.send_animation(message.chat.id, welcome_media, caption=welcome_text)
-                except:
-                    bot.send_message(message.chat.id, welcome_text)
+        # Menu
+        if data == "menu_games":
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            games = [("🃏 Blackjack", "game_blackjack"), ("🃏 Card", "game_card"), ("🎲 Dice", "game_dice"),
+                    ("🪙 Coin Flip", "game_coinflip"), ("✂️ RPS", "game_rps"), ("⭕ Tic Tac Toe", "game_tictactoe"),
+                    ("⚡ Fast Type", "game_fasttype"), ("❓ Quiz", "game_quiz"), ("😀 Emoji", "game_emoji"),
+                    ("🔢 Guess", "game_guess")]
+            for name, cb in games:
+                markup.add(types.InlineKeyboardButton(name, callback_data=cb))
+            markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="menu_main"))
+            bot.edit_message_text("🎮 <b>ZYNOX GAMES</b>\n\nSelect a game:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        
+        elif data == "menu_help":
+            show_help_menu(user_id)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        elif data == "menu_support":
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(types.InlineKeyboardButton("📢 Channel", url=SUPPORT_CHANNEL),
+                       types.InlineKeyboardButton("👥 Group", url=SUPPORT_GROUP))
+            markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="menu_main"))
+            bot.edit_message_text(f"📢 <b>ZYNOX SUPPORT</b>\n\nJoin our communities:\n\n📢 Channel: {SUPPORT_CHANNEL}\n👥 Group: {SUPPORT_GROUP}", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        
+        elif data == "menu_main":
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            handle_start(call.message)
+        
+        elif data == "help_menu":
+            show_help_menu(user_id)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        elif data == "help_games":
+            show_games_help(user_id)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        elif data == "help_economy":
+            show_economy_help(user_id)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        elif data == "help_profile":
+            show_profile_help(user_id)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        # Game shortcuts
+        elif data.startswith("game_"):
+            game = data.split("_")[1]
+            commands = {'blackjack':'/blackjack','card':'/card','dice':'/dice','coinflip':'/coinflip','rps':'/rps',
+                       'tictactoe':'/tictactoe','fasttype':'/fasttype','quiz':'/quiz','emoji':'/emoji','guess':'/guess'}
+            if game in commands:
+                dummy = call.message
+                dummy.text = commands[game]
+                dummy.from_user = call.from_user
+                dummy.chat = call.message.chat
+                if game == 'blackjack': handle_blackjack(dummy)
+                elif game == 'card': handle_card(dummy)
+                elif game == 'dice': handle_dice(dummy)
+                elif game == 'coinflip': handle_coinflip(dummy)
+                elif game == 'rps': handle_rps(dummy)
+                elif game == 'tictactoe': handle_tictactoe(dummy)
+                elif game == 'fasttype': handle_fasttype(dummy)
+                elif game == 'quiz': handle_quiz(dummy)
+                elif game == 'emoji': handle_emoji(dummy)
+                elif game == 'guess': handle_guess(dummy)
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        # Coin Flip
+        elif data.startswith("cf_"):
+            _, choice, player_id = data.split("_")
+            if int(player_id) != user_id:
+                bot.answer_callback_query(call.id, "❌ This isn't your game!", show_alert=True)
+                return
+            
+            result = random.choice(['heads', 'tails'])
+            if choice == result:
+                db.update_user_coins(user_id, GAME_REWARDS['coinflip'])
+                db.update_user_xp(user_id, XP_REWARDS['win'])
+                db.update_game_stats(user_id, 'coinflip', 'win')
+                text = f"🪙 <b>COIN FLIP</b>\n\nYou chose: {choice.upper()}\nResult: {result.upper()}\n\n🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['coinflip']} coins"
             else:
-                bot.send_message(message.chat.id, welcome_text)
-
-# MUTE SYSTEM
-@bot.message_handler(commands=['mute'])
-def mute_command(message):
-    """Mute a user in the group"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not is_bot_admin_in_group(message.chat.id):
-        bot.reply_to(message, "❌ I need to be admin to mute users.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /mute [duration] [reason]\n\nDurations: 1m, 5m, 10m, 30m, 1h, 2h, 6h, 12h, 1d, 7d")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    # Parse duration and reason
-    parts = message.text.split(' ', 2)
-    duration_text = parts[1] if len(parts) > 1 else '1h'
-    reason = parts[2] if len(parts) > 2 else 'No reason provided'
-    
-    # Get duration in seconds
-    durations = {
-        '1m': 60, '5m': 300, '10m': 600, '30m': 1800,
-        '1h': 3600, '2h': 7200, '6h': 21600, '12h': 43200,
-        '1d': 86400, '7d': 604800
-    }
-    
-    duration = durations.get(duration_text)
-    if not duration:
-        bot.reply_to(message, f"❌ Invalid duration. Available: 1m, 5m, 10m, 30m, 1h, 2h, 6h, 12h, 1d, 7d")
-        return
-    
-    # Check if target is admin
-    if is_admin_in_group(message) and target_id != message.from_user.id:
-        bot.reply_to(message, "❌ Cannot mute an admin.")
-        return
-    
-    # Mute the user
-    try:
-        until_date = time.time() + duration
-        bot.restrict_chat_member(
-            message.chat.id,
-            target_id,
-            can_send_messages=False,
-            can_send_media=False,
-            can_send_other_messages=False,
-            can_add_web_page_previews=False,
-            until_date=until_date
-        )
+                db.update_game_stats(user_id, 'coinflip', 'loss')
+                text = f"🪙 <b>COIN FLIP</b>\n\nYou chose: {choice.upper()}\nResult: {result.upper()}\n\n❌ <b>YOU LOSE!</b>"
+            
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
         
-        db.add_muted_user(
-            message.chat.id,
-            target_id,
-            message.from_user.id,
-            duration,
-            reason
-        )
+        # RPS Bot
+        elif data.startswith("rps_bot_"):
+            _, _, move, player_id = data.split("_")
+            if int(player_id) != user_id:
+                bot.answer_callback_query(call.id, "❌ This isn't your game!", show_alert=True)
+                return
+            
+            bot_move = random.choice(['rock', 'paper', 'scissors'])
+            moves = {'rock': '🪨 Rock', 'paper': '📄 Paper', 'scissors': '✂️ Scissors'}
+            
+            if move == bot_move:
+                db.update_game_stats(user_id, 'rps', 'draw')
+                text = f"✂️ <b>RPS</b>\n\n👤 You: {moves[move]}\n🤖 Bot: {moves[bot_move]}\n\n🤝 <b>IT'S A TIE!</b>"
+            elif (move == 'rock' and bot_move == 'scissors') or (move == 'paper' and bot_move == 'rock') or (move == 'scissors' and bot_move == 'paper'):
+                db.update_user_coins(user_id, GAME_REWARDS['rps'])
+                db.update_user_xp(user_id, XP_REWARDS['win'])
+                db.update_game_stats(user_id, 'rps', 'win')
+                text = f"✂️ <b>RPS</b>\n\n👤 You: {moves[move]}\n🤖 Bot: {moves[bot_move]}\n\n🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['rps']} coins"
+            else:
+                db.update_game_stats(user_id, 'rps', 'loss')
+                text = f"✂️ <b>RPS</b>\n\n👤 You: {moves[move]}\n🤖 Bot: {moves[bot_move]}\n\n❌ <b>YOU LOSE!</b>"
+            
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
         
-        # Format duration
-        if duration >= 86400:
-            duration_text = f"{duration // 86400} days"
-        elif duration >= 3600:
-            duration_text = f"{duration // 3600} hours"
-        elif duration >= 60:
-            duration_text = f"{duration // 60} minutes"
+        # Quiz
+        elif data.startswith("quiz_answer_"):
+            _, _, session_id, selected = data.split("_")
+            session_id = int(session_id)
+            selected = int(selected)
+            
+            session = db.get_quiz_session(session_id)
+            if not session or session['status'] != 'active':
+                bot.answer_callback_query(call.id, "❌ This quiz has expired!", show_alert=True)
+                return
+            
+            if session['expires_at'] < int(time.time()):
+                bot.answer_callback_query(call.id, "❌ This quiz has expired!", show_alert=True)
+                db.update_quiz_session(session_id, 'expired')
+                return
+            
+            correct = session['correct_answer']
+            questions = db.get_all_quiz_questions()
+            q = questions[session['question_id']] if session['question_id'] < len(questions) else None
+            
+            if selected == correct:
+                db.update_user_coins(user_id, GAME_REWARDS['quiz'])
+                db.update_user_xp(user_id, XP_REWARDS['quiz_correct'])
+                db.update_game_stats(user_id, 'quiz', 'win')
+                text = f"❓ <b>QUIZ</b>\n\n✅ <b>CORRECT!</b>\n\n🏆 Winner: @{call.from_user.username or 'User'}\n💰 +{GAME_REWARDS['quiz']} coins\n⭐ +{XP_REWARDS['quiz_correct']} XP"
+                if q: text += f"\n\nAnswer: {q['options'][correct]}"
+            else:
+                db.update_game_stats(user_id, 'quiz', 'loss')
+                text = f"❓ <b>QUIZ</b>\n\n❌ <b>WRONG!</b>\n\nCorrect answer: {q['options'][correct] if q else 'N/A'}"
+            
+            db.update_quiz_session(session_id, 'completed')
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
+        
+        # RPS Accept/Decline
+        elif data.startswith("rps_accept_"):
+            _, _, p1, p2 = data.split("_")
+            if int(p2) != user_id:
+                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
+                return
+            
+            p1_name = db.get_user(int(p1))['username'] or 'Player1'
+            p2_name = db.get_user(int(p2))['username'] or 'Player2'
+            
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_pvp_move_{p1}_rock"),
+                       types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_pvp_move_{p1}_paper"),
+                       types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_pvp_move_{p1}_scissors"))
+            
+            bot.edit_message_text(f"✂️ <b>RPS BATTLE</b>\n\n👤 @{p1_name}\n🔴 ❌ Not Played\n\n👤 @{p2_name}\n🔴 ❌ Not Played\n\n<b>@{p1_name}'s turn</b>", 
+                                 call.message.chat.id, call.message.message_id, reply_markup=markup)
+        
+        elif data.startswith("rps_decline_"):
+            _, _, p1, p2 = data.split("_")
+            if int(p2) != user_id:
+                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
+                return
+            bot.edit_message_text("❌ Challenge declined.", call.message.chat.id, call.message.message_id)
+        
+        # RPS PvP Move
+        elif data.startswith("rps_pvp_move_"):
+            _, _, _, player, move = data.split("_")
+            player = int(player)
+            
+            if player != user_id:
+                bot.answer_callback_query(call.id, "❌ Not your turn!", show_alert=True)
+                return
+            
+            # Get game session
+            session_id = None
+            for sid, game in game_manager.items():
+                if game['chat_id'] == call.message.chat.id and game['game_type'] == 'rps' and game['status'] == 'active':
+                    if player in [game['player1_id'], game['player2_id']]:
+                        session_id = sid
+                        break
+            
+            if not session_id:
+                bot.answer_callback_query(call.id, "❌ Game not found!", show_alert=True)
+                return
+            
+            game = get_game(session_id)
+            p1 = game['player1_id']
+            p2 = game['player2_id']
+            
+            # Record move
+            moves = game.get('moves', {})
+            moves[str(player)] = move
+            update_game(session_id, moves=moves)
+            
+            p1_name = db.get_user(p1)['username'] or 'Player1'
+            p2_name = db.get_user(p2)['username'] or 'Player2'
+            
+            # Check if both have moved
+            if str(p1) in moves and str(p2) in moves:
+                # Reveal results
+                p1_move = moves[str(p1)]
+                p2_move = moves[str(p2)]
+                move_names = {'rock': '🪨 Rock', 'paper': '📄 Paper', 'scissors': '✂️ Scissors'}
+                
+                # Determine winner
+                if p1_move == p2_move:
+                    winner_text = "🤝 <b>IT'S A TIE!</b>"
+                    winner_id = None
+                elif (p1_move == 'rock' and p2_move == 'scissors') or (p1_move == 'paper' and p2_move == 'rock') or (p1_move == 'scissors' and p2_move == 'paper'):
+                    winner_text = f"🏆 <b>WINNER: @{p1_name}</b>"
+                    winner_id = p1
+                else:
+                    winner_text = f"🏆 <b>WINNER: @{p2_name}</b>"
+                    winner_id = p2
+                
+                if winner_id:
+                    db.update_user_coins(winner_id, GAME_REWARDS['rps'])
+                    db.update_user_xp(winner_id, XP_REWARDS['win'])
+                    db.update_game_stats(winner_id, 'rps', 'win')
+                    loser_id = p2 if winner_id == p1 else p1
+                    db.update_game_stats(loser_id, 'rps', 'loss')
+                    reward_text = f"\n💰 +{GAME_REWARDS['rps']} coins\n⭐ +{XP_REWARDS['win']} XP"
+                else:
+                    db.update_game_stats(p1, 'rps', 'draw')
+                    db.update_game_stats(p2, 'rps', 'draw')
+                    reward_text = ""
+                
+                bot.edit_message_text(f"✂️ <b>RPS RESULT</b>\n\n👤 @{p1_name}\n{move_names[p1_move]}\n\n👤 @{p2_name}\n{move_names[p2_move]}\n\n{winner_text}{reward_text}", 
+                                     call.message.chat.id, call.message.message_id)
+                remove_game(session_id)
+            else:
+                # Update status
+                p1_done = str(p1) in moves
+                p2_done = str(p2) in moves
+                
+                p1_status = "🟢 ✅ Played" if p1_done else "🔴 ❌ Not Played"
+                p2_status = "🟢 ✅ Played" if p2_done else "🔴 ❌ Not Played"
+                
+                next_player = p1 if not p1_done else p2
+                next_name = db.get_user(next_player)['username'] or 'Player'
+                
+                markup = types.InlineKeyboardMarkup(row_width=3)
+                if not p1_done:
+                    markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_pvp_move_{p1}_rock"),
+                               types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_pvp_move_{p1}_paper"),
+                               types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_pvp_move_{p1}_scissors"))
+                else:
+                    markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_pvp_move_{p2}_rock"),
+                               types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_pvp_move_{p2}_paper"),
+                               types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_pvp_move_{p2}_scissors"))
+                
+                bot.edit_message_text(f"✂️ <b>RPS BATTLE</b>\n\n👤 @{p1_name}\n{p1_status}\n\n👤 @{p2_name}\n{p2_status}\n\n<b>@{next_name}'s turn</b>",
+                                     call.message.chat.id, call.message.message_id, reply_markup=markup)
+        
         else:
-            duration_text = f"{duration} seconds"
-        
-        bot.reply_to(
-            message,
-            f"🔇 MUTED USER\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"⏳ Duration: {duration_text}\n"
-            f"📝 Reason: {reason}\n\n"
-            f"🔓 Unmute at: {datetime.fromtimestamp(until_date).strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ Failed to mute user: {str(e)}")
-
-@bot.message_handler(commands=['unmute'])
-def unmute_command(message):
-    """Unmute a user in the group"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not is_bot_admin_in_group(message.chat.id):
-        bot.reply_to(message, "❌ I need to be admin to unmute users.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /unmute")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    try:
-        bot.restrict_chat_member(
-            message.chat.id,
-            target_id,
-            can_send_messages=True,
-            can_send_media=True,
-            can_send_other_messages=True,
-            can_add_web_page_previews=True,
-            until_date=None
-        )
-        
-        db.remove_muted_user(message.chat.id, target_id)
-        
-        bot.reply_to(
-            message,
-            f"🔓 UNMUTED USER\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"✅ User can now send messages."
-        )
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ Failed to unmute user: {str(e)}")
-
-@bot.message_handler(commands=['muted'])
-def muted_list_command(message):
-    """Show all muted users in the group"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    muted_users = db.get_muted_users(message.chat.id)
-    
-    if not muted_users:
-        bot.reply_to(message, "✅ No muted users in this group.")
-        return
-    
-    content = "🔇 MUTED USERS\n\n"
-    for user in muted_users:
-        try:
-            user_info = bot.get_chat_member(message.chat.id, user[1])
-            name = user_info.user.first_name
-        except:
-            name = f"User {user[1]}"
-        
-        unmuted_time = datetime.strptime(user[5], '%Y-%m-%d %H:%M:%S')
-        remaining = (unmuted_time - datetime.now()).seconds
-        hours = remaining // 3600
-        minutes = (remaining % 3600) // 60
-        
-        content += f"👤 {name}\n"
-        content += f"⏳ Remaining: {hours}h {minutes}m\n"
-        content += f"📝 Reason: {user[4] or 'No reason'}\n\n"
-    
-    bot.reply_to(message, content)
-
-# PROMOTE SYSTEM
-@bot.message_handler(commands=['promote1', 'promote2', 'promote3', 'promote4', 'promote5'])
-def promote_command(message):
-    """Promote a user to different levels"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not is_bot_admin_in_group(message.chat.id):
-        bot.reply_to(message, "❌ I need to be admin to promote users.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, f"❌ Reply to a user with /{message.text.split()[0]}")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    # Get promotion level
-    level = int(message.text.replace('promote', ''))
-    titles = {1: 'Member', 2: 'Senior Member', 3: 'VIP Member', 4: 'Elite Member', 5: 'Legendary Member'}
-    title = titles.get(level, 'Member')
-    
-    try:
-        bot.promote_chat_member(
-            message.chat.id,
-            target_id,
-            can_change_info=True,
-            can_delete_messages=True,
-            can_invite_users=True,
-            can_restrict_members=True,
-            can_pin_messages=True,
-            can_promote_members=level >= 5
-        )
-        
-        db.add_group_admin(
-            message.chat.id,
-            target_id,
-            message.from_user.id,
-            level
-        )
-        
-        bot.reply_to(
-            message,
-            f"⭐ PROMOTED\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"📊 Level: {title} (Level {level})\n"
-            f"🎖️ {title} privileges granted!\n"
-            f"💪 Promoted by: {message.from_user.first_name}"
-        )
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ Failed to promote user: {str(e)}")
-
-@bot.message_handler(commands=['demote'])
-def demote_command(message):
-    """Demote a user"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not is_bot_admin_in_group(message.chat.id):
-        bot.reply_to(message, "❌ I need to be admin to demote users.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /demote")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    try:
-        bot.promote_chat_member(
-            message.chat.id,
-            target_id,
-            can_change_info=False,
-            can_delete_messages=False,
-            can_invite_users=False,
-            can_restrict_members=False,
-            can_pin_messages=False,
-            can_promote_members=False
-        )
-        
-        db.remove_group_admin(message.chat.id, target_id)
-        
-        bot.reply_to(
-            message,
-            f"⬇️ DEMOTED\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"✅ User has been demoted from admin."
-        )
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ Failed to demote user: {str(e)}")
-
-@bot.message_handler(commands=['admins'])
-def admins_list_command(message):
-    """List all admins in the group"""
-    admins = db.get_group_admins(message.chat.id)
-    
-    if not admins:
-        bot.reply_to(message, "📋 No promoted admins in this group.")
-        return
-    
-    content = "⭐ GROUP ADMINS\n\n"
-    for admin in admins:
-        try:
-            user_info = bot.get_chat_member(message.chat.id, admin[1])
-            name = user_info.user.first_name
-        except:
-            name = f"User {admin[1]}"
-        
-        level = admin[3]
-        title = admin[4]
-        promoted_at = datetime.strptime(admin[5], '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
-        
-        content += f"👤 {name}\n"
-        content += f"📊 Level: {title} (Level {level})\n"
-        content += f"📅 Promoted: {promoted_at}\n\n"
-    
-    bot.reply_to(message, content)
-
-# WARNING SYSTEM
-@bot.message_handler(commands=['warn'])
-def warn_command(message):
-    """Warn a user"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /warn [reason]")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    reason = message.text.replace('/warn', '').strip()
-    if not reason:
-        reason = "No reason provided"
-    
-    warnings_count = db.add_warning(
-        message.chat.id,
-        target_id,
-        message.from_user.id,
-        reason
-    )
-    
-    if warnings_count >= 5:
-        try:
-            bot.ban_chat_member(message.chat.id, target_id)
-            db.add_banned_user(
-                message.chat.id,
-                target_id,
-                message.from_user.id,
-                f"5 warnings: {reason}"
-            )
-            bot.reply_to(
-                message,
-                f"🚫 USER BANNED\n\n"
-                f"👤 User: {target_user.first_name}\n"
-                f"⚠️ Received 5 warnings\n"
-                f"📝 Last Reason: {reason}\n\n"
-                f"🔨 Banned from the group."
-            )
-        except Exception as e:
-            bot.reply_to(message, f"❌ Failed to ban user: {str(e)}")
+            bot.answer_callback_query(call.id, "Feature coming soon!")
             
-    elif warnings_count >= 3:
-        try:
-            until_date = time.time() + 3600
-            bot.restrict_chat_member(
-                message.chat.id,
-                target_id,
-                can_send_messages=False,
-                can_send_media=False,
-                can_send_other_messages=False,
-                can_add_web_page_previews=False,
-                until_date=until_date
-            )
-            
-            db.add_muted_user(
-                message.chat.id,
-                target_id,
-                message.from_user.id,
-                3600,
-                f"3 warnings: {reason}"
-            )
-            
-            bot.reply_to(
-                message,
-                f"🔇 USER MUTED\n\n"
-                f"👤 User: {target_user.first_name}\n"
-                f"⚠️ Received 3 warnings\n"
-                f"📝 Reason: {reason}\n"
-                f"⏳ Muted for 1 hour."
-            )
-        except Exception as e:
-            bot.reply_to(message, f"❌ Failed to mute user: {str(e)}")
-    else:
-        bot.reply_to(
-            message,
-            f"⚠️ WARNING\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"📝 Reason: {reason}\n"
-            f"📊 Warning {warnings_count}/5\n\n"
-            f"💡 3 warnings = 1 hour mute\n"
-            f"💡 5 warnings = permanent ban"
-        )
-
-@bot.message_handler(commands=['clearwarn'])
-def clear_warn_command(message):
-    """Clear warnings for a user"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /clearwarn")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    db.clear_warnings(message.chat.id, target_id)
-    
-    bot.reply_to(
-        message,
-        f"✅ WARNINGS CLEARED\n\n"
-        f"👤 User: {target_user.first_name}\n"
-        f"📊 All warnings have been cleared."
-    )
-
-# BAN SYSTEM
-@bot.message_handler(commands=['ban'])
-def ban_command(message):
-    """Ban a user"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
-        return
-    
-    if not is_bot_admin_in_group(message.chat.id):
-        bot.reply_to(message, "❌ I need to be admin to ban users.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /ban [reason]")
-        return
-    
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
-    
-    reason = message.text.replace('/ban', '').strip()
-    if not reason:
-        reason = "No reason provided"
-    
-    if is_admin_in_group(message) and target_id != message.from_user.id:
-        bot.reply_to(message, "❌ Cannot ban an admin.")
-        return
-    
-    try:
-        bot.ban_chat_member(message.chat.id, target_id)
-        db.add_banned_user(
-            message.chat.id,
-            target_id,
-            message.from_user.id,
-            reason
-        )
-        
-        bot.reply_to(
-            message,
-            f"🚫 USER BANNED\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"📝 Reason: {reason}\n"
-            f"🔨 Banned by: {message.from_user.first_name}"
-        )
-        
     except Exception as e:
-        bot.reply_to(message, f"❌ Failed to ban user: {str(e)}")
+        bot.answer_callback_query(call.id, f"❌ Error: {str(e)}", show_alert=True)
 
-@bot.message_handler(commands=['unban'])
-def unban_command(message):
-    """Unban a user"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
+# ============== GROUP WELCOME ==============
+@bot.message_handler(content_types=['new_chat_members'])
+def handle_new_member(message):
+    for member in message.new_chat_members:
+        if member.is_bot: continue
+        
+        text = f"""👑 <b>WELCOME TO ZYNOX GAMING</b> 👑
+
+👋 Welcome, @{member.username or member.first_name}!
+
+🎮 Play exciting games
+💰 Earn coins
+🏆 Increase your rank
+⭐ Level up through activity
+⚔️ Rob other players
+🛡️ Protect your coins
+
+🎁 Start the bot in DM and claim rewards!"""
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🚀 START BOT", url=f"https://t.me/{bot.get_me().username}?start=welcome"))
+        
+        bot.send_message(message.chat.id, text, reply_markup=markup)
+        break
+
+# ============== OWNER COMMANDS ==============
+@bot.message_handler(commands=['broadcast'])
+def handle_broadcast(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
         return
-    
-    if not is_bot_admin_in_group(message.chat.id):
-        bot.reply_to(message, "❌ I need to be admin to unban users.")
-        return
-    
     if not message.reply_to_message:
-        bot.reply_to(message, "❌ Reply to a user with /unban")
+        bot.reply_to(message, "⚠️ Reply to a message to broadcast.")
         return
     
-    target_user = message.reply_to_message.from_user
-    target_id = target_user.id
+    msg = message.reply_to_message.text or "Broadcast"
+    users = db.get_all_users()
+    sent = sum(1 for u in users if bot.send_message(u['user_id'], f"📢 <b>BROADCAST</b>\n\n{msg}", parse_mode='HTML'))
     
-    try:
-        bot.unban_chat_member(message.chat.id, target_id)
-        db.remove_banned_user(message.chat.id, target_id)
-        
-        bot.reply_to(
-            message,
-            f"✅ USER UNBANNED\n\n"
-            f"👤 User: {target_user.first_name}\n"
-            f"🔓 User can now join the group again."
-        )
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ Failed to unban user: {str(e)}")
+    bot.reply_to(message, f"✅ Broadcast sent to {sent} users.")
 
-@bot.message_handler(commands=['banned'])
-def banned_list_command(message):
-    """List all banned users"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
+@bot.message_handler(commands=['gcast'])
+def handle_gcast(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    if not message.reply_to_message:
+        bot.reply_to(message, "⚠️ Reply to a message to broadcast.")
         return
     
-    db.cursor.execute('''
-        SELECT * FROM banned_users WHERE group_id = ?
-    ''', (message.chat.id,))
-    banned_users = db.cursor.fetchall()
+    msg = message.reply_to_message.text or "Broadcast"
+    groups = db.get_all_groups()
+    sent = sum(1 for g in groups if bot.send_message(g['group_id'], f"📢 <b>BROADCAST</b>\n\n{msg}", parse_mode='HTML'))
     
-    if not banned_users:
-        bot.reply_to(message, "✅ No banned users in this group.")
+    bot.reply_to(message, f"✅ Broadcast sent to {sent} groups.")
+
+@bot.message_handler(commands=['addcoins'])
+def handle_addcoins(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
         return
     
-    content = "🚫 BANNED USERS\n\n"
-    for user in banned_users:
-        try:
-            user_info = bot.get_chat_member(message.chat.id, user[1])
-            name = user_info.user.first_name
-        except:
-            name = f"User {user[1]}"
-        
-        banned_at = datetime.strptime(user[4], '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
-        content += f"👤 {name}\n"
-        content += f"📅 Banned: {banned_at}\n"
-        content += f"📝 Reason: {user[3] or 'No reason'}\n\n"
-    
-    bot.reply_to(message, content)
-
-# GROUP SETTINGS
-@bot.message_handler(commands=['settings'])
-def settings_command(message):
-    """View and manage group settings"""
-    if not is_admin_in_group(message) and message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Only admins can use this command.")
+    parts = message.text.split()
+    if len(parts) < 3:
+        bot.reply_to(message, "⚠️ Usage: /addcoins @username amount")
         return
     
-    welcome = db.get_group_setting(message.chat.id, 'welcome_enabled')
-    goodbye = db.get_group_setting(message.chat.id, 'goodbye_enabled')
-    antispam = db.get_group_setting(message.chat.id, 'anti_spam')
-    antilinks = db.get_group_setting(message.chat.id, 'anti_links')
-    antimedia = db.get_group_setting(message.chat.id, 'anti_media')
+    username = parts[1].replace('@', '')
+    amount = int(parts[2])
     
-    content = f"""
-⚙️ GROUP SETTINGS
-
-━━━━━━━━━━━━━━━━━━
-
-👋 Welcome: {'✅' if welcome else '❌'}
-👋 Goodbye: {'✅' if goodbye else '❌'}
-🛡️ Anti-Spam: {'✅' if antispam else '❌'}
-🔗 Anti-Links: {'✅' if antilinks else '❌'}
-🖼️ Anti-Media: {'✅' if antimedia else '❌'}
-
-━━━━━━━━━━━━━━━━━━
-
-Click below to toggle settings.
-"""
+    users = db.get_all_users()
+    target = next((u for u in users if u['username'] == username), None)
     
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(f"👋 Welcome {'ON' if welcome else 'OFF'}", callback_data=f"set_welcome_{message.chat.id}"),
-        types.InlineKeyboardButton(f"👋 Goodbye {'ON' if goodbye else 'OFF'}", callback_data=f"set_goodbye_{message.chat.id}"),
-        types.InlineKeyboardButton(f"🛡️ Anti-Spam {'ON' if antispam else 'OFF'}", callback_data=f"set_antispam_{message.chat.id}"),
-        types.InlineKeyboardButton(f"🔗 Anti-Links {'ON' if antilinks else 'OFF'}", callback_data=f"set_antilinks_{message.chat.id}"),
-        types.InlineKeyboardButton(f"🖼️ Anti-Media {'ON' if antimedia else 'OFF'}", callback_data=f"set_antimedia_{message.chat.id}")
-    )
-    
-    bot.reply_to(message, content, reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('set_'))
-def settings_callback_handler(call):
-    """Handle settings toggles"""
-    if call.from_user.id != OWNER_ID and not is_admin_in_group(call.message):
-        bot.answer_callback_query(call.id, "❌ Only admins can change settings.")
+    if not target:
+        bot.reply_to(message, f"❌ User @{username} not found.")
         return
     
-    parts = call.data.split('_')
-    setting = parts[1]
-    group_id = int(parts[2]) if len(parts) > 2 else call.message.chat.id
-    
-    # Toggle setting
-    setting_key = f'{setting}_enabled' if setting not in ['antilinks', 'antimedia'] else setting
-    current_value = db.get_group_setting(group_id, setting_key)
-    new_value = 0 if current_value else 1
-    db.update_group_setting(group_id, setting_key, new_value)
-    
-    # Update message
-    settings_command(call.message)
-    bot.answer_callback_query(call.id, f"✅ Setting updated!")
+    db.update_user_coins(target['user_id'], amount)
+    user = db.get_user(target['user_id'])
+    bot.reply_to(message, f"✅ Added {format_number(amount)} coins to @{username}\n\n📊 New Balance: {format_number(user['coins'])}")
 
-# ANTI-SPAM HANDLER
-@bot.message_handler(func=lambda message: True)
-def anti_spam_handler(message):
-    """Handle anti-spam and anti-link features"""
-    if message.chat.type in ['group', 'supergroup']:
-        chat_id = message.chat.id
-        user_id = message.from_user.id
-        
-        # Check if user is admin
-        if is_admin_in_group(message):
-            return
-        
-        # Check if user is muted
-        if db.is_muted(chat_id, user_id):
-            try:
-                bot.delete_message(chat_id, message.message_id)
-                bot.send_message(
-                    chat_id,
-                    f"🔇 {message.from_user.first_name}, you are muted!",
-                    reply_to_message_id=message.message_id
-                )
-            except:
-                pass
-            return
-        
-        # Check anti-links
-        if db.get_group_setting(chat_id, 'anti_links'):
-            if 'http' in message.text or 't.me' in message.text or 'telegram' in message.text:
-                try:
-                    bot.delete_message(chat_id, message.message_id)
-                    bot.send_message(
-                        chat_id,
-                        f"🔗 {message.from_user.first_name}, links are not allowed!",
-                        reply_to_message_id=message.message_id
-                    )
-                except:
-                    pass
-                return
-        
-        # Check anti-media
-        if db.get_group_setting(chat_id, 'anti_media'):
-            if message.photo or message.video or message.sticker or message.animation or message.document:
-                try:
-                    bot.delete_message(chat_id, message.message_id)
-                    bot.send_message(
-                        chat_id,
-                        f"🖼️ {message.from_user.first_name}, media files are not allowed!",
-                        reply_to_message_id=message.message_id
-                    )
-                except:
-                    pass
-                return
-
-# ========== LEADERBOARD COMMAND ==========
-@bot.message_handler(commands=['leaderboard'])
-def leaderboard_command(message):
-    db.cursor.execute('''
-        SELECT user_id, username, first_name, aura 
-        FROM users 
-        ORDER BY aura DESC 
-        LIMIT 10
-    ''')
-    results = db.cursor.fetchall()
-    
-    if not results:
-        bot.reply_to(message, "No users found.")
+@bot.message_handler(commands=['removecoins'])
+def handle_removecoins(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
         return
     
-    content = "🏆 ZYNOX GLOBAL TOP 10\n\n"
-    emojis = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-    
-    for i, row in enumerate(results):
-        name = row[2] or row[1] or f"User{row[0]}"
-        aura = format_aura(row[3])
-        content += f"{emojis[i] if i < 10 else '👤'} {name} — {aura} ⚡\n"
-    
-    bot.reply_to(message, content)
-
-# ========== ACHIEVEMENTS COMMAND ==========
-@bot.message_handler(commands=['achievements'])
-def achievements_command(message):
-    user_id = message.from_user.id
-    user = db.get_user(user_id)
-    
-    if not user:
-        bot.reply_to(message, "Please use /start first to register.")
+    parts = message.text.split()
+    if len(parts) < 3:
+        bot.reply_to(message, "⚠️ Usage: /removecoins @username amount")
         return
     
-    achievements = json.loads(user[11]) if user[11] else []
+    username = parts[1].replace('@', '')
+    amount = int(parts[2])
     
-    if not achievements:
-        content = "🏅 ACHIEVEMENTS\n\nNo achievements unlocked yet.\nKeep playing to unlock achievements!"
-    else:
-        content = "🏅 ACHIEVEMENTS\n\n" + "\n".join([f"✅ {ach}" for ach in achievements])
+    users = db.get_all_users()
+    target = next((u for u in users if u['username'] == username), None)
     
-    bot.reply_to(message, content)
-
-# ========== MYTASK COMMAND ==========
-@bot.message_handler(commands=['mytask'])
-def mytask_command(message):
-    user_id = message.from_user.id
-    today = datetime.now().date()
+    if not target:
+        bot.reply_to(message, f"❌ User @{username} not found.")
+        return
     
-    db.cursor.execute('''
-        SELECT * FROM daily_tasks 
-        WHERE user_id = ? AND task_date = ?
-    ''', (user_id, today))
-    tasks = db.cursor.fetchone()
+    db.update_user_coins(target['user_id'], -amount)
+    user = db.get_user(target['user_id'])
+    bot.reply_to(message, f"✅ Removed {format_number(amount)} coins from @{username}\n\n📊 New Balance: {format_number(user['coins'])}")
+
+@bot.message_handler(commands=['banuser'])
+def handle_banuser(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
     
-    if not tasks:
-        task_list = [
-            "☐ Send 50 messages",
-            "☐ Win 1 Quiz",
-            "☐ Use Dice",
-            "☐ Win 1 Game",
-            "☐ Give Appreciation"
-        ]
-        random.shuffle(task_list)
-        tasks_json = json.dumps(task_list[:3])
-        
-        db.cursor.execute('''
-            INSERT INTO daily_tasks (user_id, task_date, tasks, completed_tasks, reward_claimed)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, today, tasks_json, '[]', 0))
-        db.conn.commit()
-        
-        tasks_to_show = task_list[:3]
-    else:
-        tasks_to_show = json.loads(tasks[2])
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ Usage: /banuser @username")
+        return
     
-    content = "🎯 TODAY'S TASKS\n\n" + "\n".join(tasks_to_show) + "\n\n🏆 Completion Reward: +250 Aura"
+    username = parts[1].replace('@', '')
+    users = db.get_all_users()
+    target = next((u for u in users if u['username'] == username), None)
     
-    bot.reply_to(message, content)
+    if not target:
+        bot.reply_to(message, f"❌ User @{username} not found.")
+        return
+    
+    db.ban_user(target['user_id'], ' '.join(parts[2:]) if len(parts) > 2 else 'No reason')
+    bot.reply_to(message, f"✅ User @{username} banned.")
+    bot.send_message(target['user_id'], "🚫 <b>You have been banned</b>\n\nContact support for more information.", parse_mode='HTML')
 
-# ========== HELP COMMAND ==========
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    content = """
-📚 ZYNOX GAMING HELP
+@bot.message_handler(commands=['unbanuser'])
+def handle_unbanuser(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ Usage: /unbanuser @username")
+        return
+    
+    username = parts[1].replace('@', '')
+    users = db.get_all_users()
+    target = next((u for u in users if u['username'] == username), None)
+    
+    if not target:
+        bot.reply_to(message, f"❌ User @{username} not found.")
+        return
+    
+    db.unban_user(target['user_id'])
+    bot.reply_to(message, f"✅ User @{username} unbanned.")
+    bot.send_message(target['user_id'], "✅ <b>You have been unbanned</b>\n\nYou can now use the bot again.", parse_mode='HTML')
 
-━━━━━━━━━━━━━━━━━━
+@bot.message_handler(commands=['users'])
+def handle_users(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    
+    users = db.get_all_users()
+    total_coins = sum(u['coins'] for u in users)
+    bot.reply_to(message, f"📊 <b>User Statistics</b>\n\n👥 Total Users: {len(users)}\n💰 Total Coins: {format_number(total_coins)}\n🏅 Avg Coins: {format_number(total_coins // len(users)) if users else 0}", parse_mode='HTML')
 
-🎮 GAME COMMANDS:
-/dice - Roll a dice
-/rps - Rock Paper Scissors  
-/quiz - Answer a quiz
-/guess - Guess the number
-/math - Math battle
-/slots - Slot machine
+@bot.message_handler(commands=['groups'])
+def handle_groups(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    
+    groups = db.get_all_groups()
+    text = "📊 <b>Group Statistics</b>\n\n"
+    for g in groups[:20]:
+        text += f"👥 {g['group_name'] or 'Unknown'}: {g['member_count']} members\n"
+    if len(groups) > 20:
+        text += f"\n... and {len(groups) - 20} more groups"
+    bot.reply_to(message, text, parse_mode='HTML')
 
-━━━━━━━━━━━━━━━━━━
+@bot.message_handler(commands=['stats_owner'])
+def handle_stats_owner(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    
+    users = db.get_all_users()
+    groups = db.get_all_groups()
+    total_coins = sum(u['coins'] for u in users)
+    bot.reply_to(message, f"📊 <b>Bot Statistics</b>\n\n👥 Users: {len(users)}\n👥 Groups: {len(groups)}\n💰 Total Coins: {format_number(total_coins)}\n🏆 Top: {format_number(max([u['coins'] for u in users]) if users else 0)}", parse_mode='HTML')
 
-💍 SOCIAL COMMANDS:
-/marry - Propose to someone
-/divorce - Divorce your partner
-/relationship - Check relationship status
-/friendship - Check friendship level
+@bot.message_handler(commands=['restart'])
+def handle_restart(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    bot.reply_to(message, "🔄 Bot restarting... (Manual restart required)")
 
-━━━━━━━━━━━━━━━━━━
+@bot.message_handler(commands=['backup'])
+def handle_backup(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "❌ You don't have permission!")
+        return
+    bot.reply_to(message, "✅ Backup command received. (Manual backup required)")
 
-👤 USER COMMANDS:
-/start - Start the bot
-/profile - View your profile
-/claim - Claim daily reward
-/roast - Roast someone
-/mytask - View daily tasks
-/achievements - View achievements
-/leaderboard - View top players
+# ============== TEXT HANDLER ==============
+@bot.message_handler(func=lambda m: True)
+def handle_text(message):
+    # Handle fast type responses
+    if message.text and message.text.lower() in FAST_TYPE_WORDS:
+        # Check for active fast type session
+        pass
 
-━━━━━━━━━━━━━━━━━━
-
-👑 ADMIN COMMANDS:
-/mute - Mute a user
-/unmute - Unmute a user
-/muted - View muted users
-/promote1-5 - Promote a user
-/demote - Demote a user
-/warn - Warn a user
-/clearwarn - Clear warnings
-/ban - Ban a user
-/unban - Unban a user
-/banned - View banned users
-/settings - Group settings
-
-━━━━━━━━━━━━━━━━━━
-
-🌌 Support: @internationalpanditG
-"""
-    bot.reply_to(message, content)
-
-# ========== RUN BOT ==========
+# ============== RUN ==============
 if __name__ == "__main__":
-    print("🤖 ZYNOX GAMING BOT IS RUNNING...")
-    print("✅ All systems loaded successfully!")
-    print("📊 Bot ready to serve!")
-    bot.polling(none_stop=True)
+    logger.info("🚀 Starting Zynox Gaming Bot...")
+    bot.infinity_polling()
