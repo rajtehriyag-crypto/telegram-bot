@@ -1,2310 +1,1166 @@
-import os
-import json
-import random
-import sqlite3
-import time
-import logging
-from datetime import datetime
-from threading import Lock
-
 import telebot
-from telebot import types
-from dotenv import load_dotenv
+import sqlite3
+import random
+import time
+from datetime import datetime, timedelta
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import threading
+import json
+import os
 
-# Load environment variables
-load_dotenv()
-
-# Configuration
-BOT_TOKEN = "8897042969:AAFVI298X8Y9kAE0N2MhNDYBcSNfo1klyLU"
-OWNER_ID = int(os.getenv('OWNER_ID', '8727799160'))
-SUPPORT_CHANNEL = os.getenv('SUPPORT_CHANNEL', 'https://t.me/+CS-ZvjWSB1oxZjZl')
-SUPPORT_GROUP = os.getenv('SUPPORT_GROUP', 'https://t.me/+97rox0VQWXNiMzg1')
-
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is required!")
+# Bot Configuration
+BOT_TOKEN = "8897042969:AAFVI298X8Y9kAE0N2MhNDYBcSNfo1klyLU"  # Replace with actual token
+OWNER_ID = 8727799160
+OWNER_USERNAME = "@internationalpanditG"
+SUPPORT_CHANNEL = "https://t.me/+CS-ZvjWSB1oxZjZl"
+SUPPORT_GROUP = "https://t.me/+97rox0VQWXNiMzg1"
+BOT_USERNAME = "@zynoxgamingbot"
 
 # Initialize bot
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Database setup
+def init_db():
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    
+    # Users table
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_name TEXT,
+                  coins INTEGER DEFAULT 0,
+                  xp INTEGER DEFAULT 0,
+                  level INTEGER DEFAULT 1,
+                  rank TEXT DEFAULT 'Bronze',
+                  games_played INTEGER DEFAULT 0,
+                  wins INTEGER DEFAULT 0,
+                  losses INTEGER DEFAULT 0,
+                  daily_claim_date TEXT,
+                  dice_rolls_today INTEGER DEFAULT 0,
+                  dice_last_reset TEXT,
+                  streak INTEGER DEFAULT 0,
+                  created_at TEXT)''')
+    
+    # Groups table
+    c.execute('''CREATE TABLE IF NOT EXISTS groups
+                 (group_id INTEGER PRIMARY KEY,
+                  group_name TEXT,
+                  added_date TEXT)''')
+    
+    # Transactions table
+    c.execute('''CREATE TABLE IF NOT EXISTS transactions
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  type TEXT,
+                  amount INTEGER,
+                  description TEXT,
+                  timestamp TEXT)''')
+    
+    # Bot wallet table
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_wallet
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  balance INTEGER DEFAULT 0,
+                  last_updated TEXT)''')
+    
+    # Initialize wallet if empty
+    c.execute("SELECT COUNT(*) FROM bot_wallet")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO bot_wallet (balance, last_updated) VALUES (0, ?)", 
+                 (datetime.now().isoformat(),))
+    
+    # Matches table
+    c.execute('''CREATE TABLE IF NOT EXISTS matches
+                 (match_id TEXT PRIMARY KEY,
+                  game_type TEXT,
+                  host_id INTEGER,
+                  player2_id INTEGER,
+                  bet_amount INTEGER,
+                  prize_pool INTEGER,
+                  status TEXT,
+                  board TEXT,
+                  current_player INTEGER,
+                  winner_id INTEGER,
+                  created_at TEXT,
+                  updated_at TEXT)''')
+    
+    conn.commit()
+    conn.close()
 
-# Constants
-DAILY_REWARD = 5000
-GROUP_CLAIM_REWARD = 10000
-ROB_MAX_AMOUNT = 10000
-PROTECTION_DURATION = 24
-PvP_EXPIRY = 120
+# Database helper functions
+def get_user(user_id):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user = c.fetchone()
+    conn.close()
+    return user
 
-# Game rewards
-GAME_REWARDS = {
-    'blackjack': 50,
-    'card': 20,
-    'dice': 25,
-    'coinflip': 15,
-    'rps': 20,
-    'tictactoe': 40,
-    'fasttype': 35,
-    'quiz': 30,
-    'emoji': 25,
-    'guess': 20
-}
+def create_user(user_id, username, first_name):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("""INSERT OR REPLACE INTO users 
+                 (user_id, username, first_name, created_at) 
+                 VALUES (?, ?, ?, ?)""",
+              (user_id, username, first_name, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
 
-# XP rewards
-XP_REWARDS = {
-    'win': 25,
-    'play': 10,
-    'quiz_correct': 20,
-    'fasttype_win': 30,
-    'claim': 15
-}
+def update_user_balance(user_id, amount):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
 
-# Ranks
-RANKS = [
-    {'name': '🥉 Bronze', 'threshold': 0},
-    {'name': '🥈 Silver', 'threshold': 10000},
-    {'name': '🥇 Gold', 'threshold': 50000},
-    {'name': '💎 Platinum', 'threshold': 150000},
-    {'name': '🔷 Diamond', 'threshold': 400000},
-    {'name': '👑 Heroic', 'threshold': 1000000},
-    {'name': '🔥 Master', 'threshold': 2500000},
-    {'name': '🏆 Grandmaster', 'threshold': 5000000},
-    {'name': '🌟 Elite', 'threshold': 10000000}
-]
+def get_user_balance(user_id):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("SELECT coins FROM users WHERE user_id = ?", (user_id,))
+    balance = c.fetchone()
+    conn.close()
+    return balance[0] if balance else 0
 
-LEVEL_XP_REQUIREMENTS = [0] + [i * 100 for i in range(1, 101)]
+def add_transaction(user_id, type, amount, description):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("""INSERT INTO transactions (user_id, type, amount, description, timestamp) 
+                 VALUES (?, ?, ?, ?, ?)""",
+              (user_id, type, amount, description, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
 
-# Quiz Questions
-QUIZ_QUESTIONS = [
-    {'question': 'Which planet is known as the Red Planet?', 'options': ['Venus', 'Mars', 'Jupiter', 'Saturn'], 'correct': 1},
-    {'question': 'What is the capital of France?', 'options': ['London', 'Berlin', 'Paris', 'Madrid'], 'correct': 2},
-    {'question': 'Which element has the chemical symbol "Au"?', 'options': ['Silver', 'Copper', 'Gold', 'Iron'], 'correct': 2},
-    {'question': 'What is the largest ocean on Earth?', 'options': ['Atlantic', 'Indian', 'Arctic', 'Pacific'], 'correct': 3},
-    {'question': 'Who developed the theory of relativity?', 'options': ['Newton', 'Einstein', 'Hawking', 'Galileo'], 'correct': 1},
-    {'question': 'What is the hardest natural substance?', 'options': ['Gold', 'Iron', 'Diamond', 'Platinum'], 'correct': 2},
-    {'question': 'Which animal is known as the King of the Jungle?', 'options': ['Tiger', 'Lion', 'Elephant', 'Bear'], 'correct': 1},
-    {'question': 'What is the chemical formula for water?', 'options': ['CO2', 'H2O', 'NaCl', 'HCl'], 'correct': 1},
-    {'question': 'Which country has the largest population?', 'options': ['India', 'China', 'USA', 'Indonesia'], 'correct': 0},
-    {'question': 'What is the tallest mountain in the world?', 'options': ['K2', 'Everest', 'Makalu', 'Lhotse'], 'correct': 1}
-]
+def get_bot_wallet():
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("SELECT balance FROM bot_wallet ORDER BY id DESC LIMIT 1")
+    balance = c.fetchone()
+    conn.close()
+    return balance[0] if balance else 0
 
-EMOJI_QUESTIONS = [
-    {'emojis': '🚢 ❤️ 💔', 'answer': 'titanic'},
-    {'emojis': '👽 🔫 👨', 'answer': 'alien'},
-    {'emojis': '👑 🦁 🐗', 'answer': 'lion king'},
-    {'emojis': '🤖 ❤️ 👨', 'answer': 'wall-e'},
-    {'emojis': '🧙 ⚡ 🎓', 'answer': 'harry potter'},
-    {'emojis': '🕷️ 👨 🏙️', 'answer': 'spiderman'},
-    {'emojis': '😈 👔 💼', 'answer': 'devil wears prada'},
-    {'emojis': '🚀 👨 🌌', 'answer': 'interstellar'},
-    {'emojis': '🧜 🧜‍♀️ 🌊', 'answer': 'aquaman'},
-    {'emojis': '🐾 🦁 🎶', 'answer': 'lion king'}
-]
+def update_bot_wallet(amount):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("UPDATE bot_wallet SET balance = balance + ?, last_updated = ?", 
+              (amount, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
 
-FAST_TYPE_WORDS = ['gaming', 'python', 'coding', 'programming', 'bot', 'telegram', 'development', 'software', 'engineer', 'gamer', 'streamer', 'controller', 'keyboard', 'monitor', 'processor', 'memory', 'storage']
-
-# ============== DATABASE ==============
-class Database:
-    def __init__(self):
-        self.db_path = 'database/zynox.db'
-        os.makedirs('database', exist_ok=True)
-        self.lock = Lock()
-        self._init_tables()
-
-    def _get_connection(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
-
-    def _init_tables(self):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            
-            # Users
-            c.execute('''CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                coins INTEGER DEFAULT 0,
-                xp INTEGER DEFAULT 0,
-                level INTEGER DEFAULT 1,
-                total_games INTEGER DEFAULT 0,
-                wins INTEGER DEFAULT 0,
-                losses INTEGER DEFAULT 0,
-                draws INTEGER DEFAULT 0,
-                protection_expiry INTEGER DEFAULT 0,
-                daily_claim_timestamp INTEGER DEFAULT 0,
-                first_start_timestamp INTEGER DEFAULT 0,
-                last_activity_timestamp INTEGER DEFAULT 0,
-                is_banned INTEGER DEFAULT 0,
-                level_rewards TEXT DEFAULT '[]',
-                current_rank TEXT DEFAULT '🥉 Bronze'
-            )''')
-            
-            # Groups
-            c.execute('''CREATE TABLE IF NOT EXISTS groups (
-                group_id INTEGER PRIMARY KEY,
-                group_name TEXT,
-                group_claimed INTEGER DEFAULT 0,
-                member_count INTEGER DEFAULT 0
-            )''')
-            
-            # Game stats
-            c.execute('''CREATE TABLE IF NOT EXISTS game_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                game_type TEXT,
-                played INTEGER DEFAULT 0,
-                wins INTEGER DEFAULT 0,
-                losses INTEGER DEFAULT 0,
-                draws INTEGER DEFAULT 0
-            )''')
-            
-            # Game sessions
-            c.execute('''CREATE TABLE IF NOT EXISTS game_sessions (
-                session_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                game_type TEXT,
-                player1_id INTEGER,
-                player2_id INTEGER DEFAULT NULL,
-                current_state TEXT,
-                moves TEXT,
-                winner_id INTEGER DEFAULT NULL,
-                status TEXT DEFAULT 'active',
-                created_at INTEGER,
-                expires_at INTEGER
-            )''')
-            
-            # Quiz sessions
-            c.execute('''CREATE TABLE IF NOT EXISTS quiz_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                question_id INTEGER,
-                correct_answer INTEGER,
-                status TEXT DEFAULT 'active',
-                created_at INTEGER,
-                expires_at INTEGER
-            )''')
-            
-            # Emoji sessions
-            c.execute('''CREATE TABLE IF NOT EXISTS emoji_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                question_id INTEGER,
-                correct_answer TEXT,
-                status TEXT DEFAULT 'active',
-                created_at INTEGER,
-                expires_at INTEGER
-            )''')
-            
-            # Fast type sessions
-            c.execute('''CREATE TABLE IF NOT EXISTS fasttype_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                word TEXT,
-                status TEXT DEFAULT 'active',
-                created_at INTEGER,
-                expires_at INTEGER
-            )''')
-            
-            # Number sessions
-            c.execute('''CREATE TABLE IF NOT EXISTS number_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                number INTEGER,
-                status TEXT DEFAULT 'active',
-                created_at INTEGER,
-                expires_at INTEGER
-            )''')
-            
-            # Bans
-            c.execute('''CREATE TABLE IF NOT EXISTS bans (
-                user_id INTEGER PRIMARY KEY,
-                reason TEXT,
-                banned_at INTEGER
-            )''')
-            
-            # Settings
-            c.execute('''CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )''')
-            
-            # Init quiz
-            c.execute('SELECT value FROM settings WHERE key = "quiz_initialized"')
-            if not c.fetchone():
-                c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES ("quiz_questions", ?)', (json.dumps(QUIZ_QUESTIONS),))
-                c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES ("emoji_questions", ?)', (json.dumps(EMOJI_QUESTIONS),))
-                c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES ("quiz_initialized", "true")')
-            
-            conn.commit()
-            logger.info("Database tables initialized")
-
-    def get_user(self, user_id, username=None, first_name=None):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            c.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-            user = c.fetchone()
-            
-            if not user:
-                if not username:
-                    username = str(user_id)
-                if not first_name:
-                    first_name = f'User_{user_id}'
-                
-                c.execute('INSERT INTO users (user_id, username, first_name, first_start_timestamp, last_activity_timestamp) VALUES (?, ?, ?, ?, ?)',
-                         (user_id, username, first_name, int(time.time()), int(time.time())))
-                conn.commit()
-                
-                for game in ['blackjack', 'card', 'dice', 'coinflip', 'rps', 'tictactoe', 'fasttype', 'quiz', 'emoji', 'guess']:
-                    c.execute('INSERT INTO game_stats (user_id, game_type) VALUES (?, ?)', (user_id, game))
-                conn.commit()
-                
-                self._notify_owner_new_user(user_id, username, first_name)
-                
-                c.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-                user = c.fetchone()
-            
-            return {
-                'user_id': user[0],
-                'username': user[1],
-                'first_name': user[2],
-                'coins': user[3],
-                'xp': user[4],
-                'level': user[5],
-                'total_games': user[6],
-                'wins': user[7],
-                'losses': user[8],
-                'draws': user[9],
-                'protection_expiry': user[10],
-                'daily_claim_timestamp': user[11],
-                'first_start_timestamp': user[12],
-                'last_activity_timestamp': user[13],
-                'is_banned': user[14],
-                'level_rewards': json.loads(user[15]) if user[15] else [],
-                'current_rank': user[16] if len(user) > 16 else '🥉 Bronze'
-            }
-
-    def _notify_owner_new_user(self, user_id, username, first_name):
-        try:
-            total = self.get_total_users()
-            bot.send_message(OWNER_ID, 
-                f"🔔 <b>NEW USER STARTED BOT</b>\n\n"
-                f"👤 Name: {first_name}\n"
-                f"📛 Username: @{username}\n"
-                f"🆔 User ID: <code>{user_id}</code>\n\n"
-                f"📅 Date: {datetime.now().strftime('%d %b %Y')}\n"
-                f"⏰ Time: {datetime.now().strftime('%I:%M %p')}\n\n"
-                f"👥 Total Users: {total:,}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify owner: {e}")
-
-    def get_total_users(self):
-        with self._get_connection() as conn:
-            return conn.cursor().execute('SELECT COUNT(*) FROM users').fetchone()[0]
-
-    def update_user_coins(self, user_id, amount):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            c.execute('UPDATE users SET coins = coins + ? WHERE user_id = ?', (amount, user_id))
-            conn.commit()
-            self._update_rank(user_id)
-
-    def update_user_xp(self, user_id, xp_amount):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            c.execute('UPDATE users SET xp = xp + ? WHERE user_id = ?', (xp_amount, user_id))
-            conn.commit()
-            
-            user = self.get_user(user_id)
-            level = user['level']
-            total_xp = user['xp'] + xp_amount
-            
-            new_level = level
-            while new_level < len(LEVEL_XP_REQUIREMENTS) and total_xp >= LEVEL_XP_REQUIREMENTS[new_level]:
-                new_level += 1
-            
-            if new_level > level:
-                rewards = user['level_rewards']
-                for i in range(level, new_level):
-                    if i not in rewards:
-                        rewards.append(i)
-                        bonus = i * 1000
-                        self.update_user_coins(user_id, bonus)
-                        try:
-                            bot.send_message(user_id,
-                                f"🎉 <b>LEVEL UP!</b>\n\n"
-                                f"⭐ Level {i} → {i + 1}\n"
-                                f"💰 Reward: +{bonus:,} Coins\n"
-                                f"✨ XP: {total_xp:,}"
-                            )
-                        except:
-                            pass
-                
-                c.execute('UPDATE users SET level = ?, level_rewards = ? WHERE user_id = ?',
-                         (new_level, json.dumps(rewards), user_id))
-                conn.commit()
-
-    def _update_rank(self, user_id):
-        coins = self.get_user(user_id)['coins']
-        rank = RANKS[0]['name']
-        for r in RANKS:
-            if coins >= r['threshold']:
-                rank = r['name']
-        with self._get_connection() as conn:
-            conn.cursor().execute('UPDATE users SET current_rank = ? WHERE user_id = ?', (rank, user_id))
-            conn.commit()
-
-    def get_global_rank(self, user_id):
-        with self._get_connection() as conn:
-            return conn.cursor().execute(
-                'SELECT COUNT(*) + 1 FROM users WHERE coins > (SELECT coins FROM users WHERE user_id = ?)',
-                (user_id,)
-            ).fetchone()[0]
-
-    def get_leaderboard(self, limit=10):
-        with self._get_connection() as conn:
-            return [{'user_id': r[0], 'username': r[1], 'coins': r[2], 'first_name': r[3]}
-                    for r in conn.cursor().execute(
-                        'SELECT user_id, username, coins, first_name FROM users ORDER BY coins DESC LIMIT ?',
-                        (limit,)
-                    ).fetchall()]
-
-    def get_user_game_stats(self, user_id):
-        with self._get_connection() as conn:
-            result = {}
-            for r in conn.cursor().execute('SELECT * FROM game_stats WHERE user_id = ?', (user_id,)).fetchall():
-                result[r[2]] = {'played': r[3], 'wins': r[4], 'losses': r[5], 'draws': r[6]}
-            return result
-
-    def update_game_stats(self, user_id, game_type, result):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            if result == 'win':
-                c.execute('UPDATE game_stats SET played = played + 1, wins = wins + 1 WHERE user_id = ? AND game_type = ?',
-                         (user_id, game_type))
-                c.execute('UPDATE users SET total_games = total_games + 1, wins = wins + 1 WHERE user_id = ?',
-                         (user_id,))
-            elif result == 'loss':
-                c.execute('UPDATE game_stats SET played = played + 1, losses = losses + 1 WHERE user_id = ? AND game_type = ?',
-                         (user_id, game_type))
-                c.execute('UPDATE users SET total_games = total_games + 1, losses = losses + 1 WHERE user_id = ?',
-                         (user_id,))
-            elif result == 'draw':
-                c.execute('UPDATE game_stats SET played = played + 1, draws = draws + 1 WHERE user_id = ? AND game_type = ?',
-                         (user_id, game_type))
-                c.execute('UPDATE users SET total_games = total_games + 1, draws = draws + 1 WHERE user_id = ?',
-                         (user_id,))
-            conn.commit()
-
-    def get_protection(self, user_id):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT protection_expiry FROM users WHERE user_id = ?', (user_id,)).fetchone()
-            if r and r[0] > int(time.time()):
-                return True, r[0] - int(time.time())
-            return False, 0
-
-    def set_protection(self, user_id):
-        with self._get_connection() as conn:
-            expiry = int(time.time()) + PROTECTION_DURATION * 3600
-            conn.cursor().execute('UPDATE users SET protection_expiry = ? WHERE user_id = ?', (expiry, user_id))
-            conn.commit()
-
-    def can_claim_daily(self, user_id):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT daily_claim_timestamp FROM users WHERE user_id = ?', (user_id,)).fetchone()
-            if r and r[0] > 0:
-                next_claim = r[0] + 24 * 3600
-                if next_claim > int(time.time()):
-                    return False, next_claim - int(time.time())
-            return True, 0
-
-    def claim_daily(self, user_id):
-        with self._get_connection() as conn:
-            conn.cursor().execute('UPDATE users SET daily_claim_timestamp = ? WHERE user_id = ?',
-                                 (int(time.time()), user_id))
-            conn.commit()
-        self.update_user_coins(user_id, DAILY_REWARD)
-        self.update_user_xp(user_id, XP_REWARDS['claim'])
-        return DAILY_REWARD
-
-    def get_group_claim_status(self, group_id):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT group_claimed FROM groups WHERE group_id = ?', (group_id,)).fetchone()
-            return r and r[0] == 1
-
-    def claim_group_reward(self, group_id, user_id):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            if c.execute('SELECT group_claimed FROM groups WHERE group_id = ?', (group_id,)).fetchone():
-                return False
-            c.execute('INSERT OR REPLACE INTO groups (group_id, group_claimed) VALUES (?, 1)', (group_id,))
-            conn.commit()
-        self.update_user_coins(user_id, GROUP_CLAIM_REWARD)
-        return True
-
-    def save_game_session(self, chat_id, game_type, player1_id, player2_id=None, moves=None, state=None):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            created = int(time.time())
-            c.execute('''INSERT INTO game_sessions 
-                        (chat_id, game_type, player1_id, player2_id, current_state, moves, created_at, expires_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                     (chat_id, game_type, player1_id, player2_id, state or 'waiting',
-                      json.dumps(moves or {}), created, created + PvP_EXPIRY))
-            conn.commit()
-            return c.lastrowid
-
-    def update_game_session(self, session_id, **kwargs):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            updates = []
-            values = []
-            for k, v in kwargs.items():
-                if k == 'moves':
-                    v = json.dumps(v)
-                updates.append(f"{k} = ?")
-                values.append(v)
-            if updates:
-                values.append(session_id)
-                c.execute(f"UPDATE game_sessions SET {', '.join(updates)} WHERE session_id = ?", values)
-                conn.commit()
-
-    def get_game_session(self, session_id):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT * FROM game_sessions WHERE session_id = ?', (session_id,)).fetchone()
-            if r:
-                return {
-                    'session_id': r[0],
-                    'chat_id': r[1],
-                    'game_type': r[2],
-                    'player1_id': r[3],
-                    'player2_id': r[4],
-                    'current_state': r[5],
-                    'moves': json.loads(r[6]) if r[6] else {},
-                    'winner_id': r[7],
-                    'status': r[8],
-                    'created_at': r[9],
-                    'expires_at': r[10]
-                }
-            return None
-
-    def save_quiz_session(self, chat_id, question_id, correct_answer):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            created = int(time.time())
-            c.execute('INSERT INTO quiz_sessions (chat_id, question_id, correct_answer, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
-                     (chat_id, question_id, correct_answer, created, created + 60))
-            conn.commit()
-            return c.lastrowid
-
-    def update_quiz_session(self, session_id, status):
-        with self._get_connection() as conn:
-            conn.cursor().execute('UPDATE quiz_sessions SET status = ? WHERE id = ?', (status, session_id))
-            conn.commit()
-
-    def get_quiz_session(self, session_id):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT * FROM quiz_sessions WHERE id = ?', (session_id,)).fetchone()
-            if r:
-                return {
-                    'id': r[0],
-                    'chat_id': r[1],
-                    'question_id': r[2],
-                    'correct_answer': r[3],
-                    'status': r[4],
-                    'created_at': r[5],
-                    'expires_at': r[6]
-                }
-            return None
-
-    def save_emoji_session(self, chat_id, question_id, correct_answer):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            created = int(time.time())
-            c.execute('INSERT INTO emoji_sessions (chat_id, question_id, correct_answer, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
-                     (chat_id, question_id, correct_answer, created, created + 60))
-            conn.commit()
-            return c.lastrowid
-
-    def save_fasttype_session(self, chat_id, word):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            created = int(time.time())
-            c.execute('INSERT INTO fasttype_sessions (chat_id, word, created_at, expires_at) VALUES (?, ?, ?, ?)',
-                     (chat_id, word, created, created + 30))
-            conn.commit()
-            return c.lastrowid
-
-    def save_number_session(self, chat_id, number):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            created = int(time.time())
-            c.execute('INSERT INTO number_sessions (chat_id, number, created_at, expires_at) VALUES (?, ?, ?, ?)',
-                     (chat_id, number, created, created + 120))
-            conn.commit()
-            return c.lastrowid
-
-    def get_all_quiz_questions(self):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT value FROM settings WHERE key = "quiz_questions"').fetchone()
-            return json.loads(r[0]) if r else QUIZ_QUESTIONS
-
-    def get_all_emoji_questions(self):
-        with self._get_connection() as conn:
-            r = conn.cursor().execute('SELECT value FROM settings WHERE key = "emoji_questions"').fetchone()
-            return json.loads(r[0]) if r else EMOJI_QUESTIONS
-
-    def is_user_banned(self, user_id):
-        with self._get_connection() as conn:
-            return conn.cursor().execute('SELECT user_id FROM bans WHERE user_id = ?', (user_id,)).fetchone() is not None
-
-    def ban_user(self, user_id, reason=None):
-        with self._get_connection() as conn:
-            conn.cursor().execute('INSERT OR REPLACE INTO bans (user_id, reason, banned_at) VALUES (?, ?, ?)',
-                                 (user_id, reason or 'No reason provided', int(time.time())))
-            conn.commit()
-
-    def unban_user(self, user_id):
-        with self._get_connection() as conn:
-            conn.cursor().execute('DELETE FROM bans WHERE user_id = ?', (user_id,))
-            conn.commit()
-
-    def get_all_users(self):
-        with self._get_connection() as conn:
-            return [{'user_id': r[0], 'username': r[1], 'first_name': r[2], 'coins': r[3], 'level': r[4]}
-                    for r in conn.cursor().execute('SELECT user_id, username, first_name, coins, level FROM users').fetchall()]
-
-    def get_all_groups(self):
-        with self._get_connection() as conn:
-            return [{'group_id': r[0], 'group_name': r[1], 'group_claimed': r[2] == 1, 'member_count': r[3]}
-                    for r in conn.cursor().execute('SELECT group_id, group_name, group_claimed, member_count FROM groups').fetchall()]
-
-    def update_group_info(self, group_id, group_name=None, member_count=None):
-        with self._get_connection() as conn:
-            c = conn.cursor()
-            if group_name and member_count:
-                c.execute('INSERT OR REPLACE INTO groups (group_id, group_name, member_count) VALUES (?, ?, ?)',
-                         (group_id, group_name, member_count))
-            elif group_name:
-                c.execute('INSERT OR REPLACE INTO groups (group_id, group_name) VALUES (?, ?)',
-                         (group_id, group_name))
-            elif member_count:
-                c.execute('INSERT OR REPLACE INTO groups (group_id, member_count) VALUES (?, ?)',
-                         (group_id, member_count))
-            conn.commit()
-
-    def get_top_users_by_coins(self, limit=10):
-        with self._get_connection() as conn:
-            return [{'user_id': r[0], 'username': r[1], 'coins': r[2], 'level': r[3], 'first_name': r[4]}
-                    for r in conn.cursor().execute(
-                        'SELECT user_id, username, coins, level, first_name FROM users ORDER BY coins DESC LIMIT ?',
-                        (limit,)
-                    ).fetchall()]
-
-# Initialize database
-db = Database()
-logger.info("Database initialized")
-
-# Game manager
-game_manager = {}
-
-def create_game(chat_id, game_type, player1_id, player2_id=None):
-    session_id = db.save_game_session(chat_id, game_type, player1_id, player2_id)
-    game_manager[session_id] = {
-        'chat_id': chat_id,
-        'game_type': game_type,
-        'player1_id': player1_id,
-        'player2_id': player2_id,
-        'moves': {},
-        'state': 'waiting',
-        'created_at': time.time(),
-        'status': 'active'
+# Level and Rank calculations
+def calculate_level(xp):
+    levels = {
+        1: 0, 2: 100, 3: 250, 4: 500, 5: 800,
+        6: 1150, 7: 1550, 8: 2000, 9: 2500, 10: 3100
     }
-    return session_id
+    
+    for level in sorted(levels.keys()):
+        if xp < levels[level]:
+            return level - 1, levels[level] if level > 1 else 0
+    
+    # After level 10
+    level = 10
+    xp_needed = 3100
+    while xp >= xp_needed:
+        level += 1
+        xp_needed += 500 * (level - 9)
+    return level - 1, xp_needed
 
-def get_game(session_id):
-    return game_manager.get(session_id)
+def get_rank(level):
+    if level <= 3: return "🥉 Bronze"
+    elif level <= 6: return "🥈 Silver"
+    elif level <= 10: return "🥇 Gold"
+    elif level <= 15: return "💎 Diamond"
+    elif level <= 20: return "👑 Master"
+    else: return "🔥 Legend"
 
-def update_game(session_id, **kwargs):
-    if session_id in game_manager:
-        for k, v in kwargs.items():
-            if k == 'moves' and isinstance(v, dict):
-                game_manager[session_id]['moves'].update(v)
-            else:
-                game_manager[session_id][k] = v
-        db.update_game_session(session_id, **kwargs)
+def update_user_xp(user_id, xp_gained):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("SELECT xp FROM users WHERE user_id = ?", (user_id,))
+    current_xp = c.fetchone()[0]
+    new_xp = current_xp + xp_gained
+    
+    level, _ = calculate_level(new_xp)
+    rank = get_rank(level)
+    
+    c.execute("UPDATE users SET xp = ?, level = ?, rank = ? WHERE user_id = ?", 
+              (new_xp, level, rank, user_id))
+    conn.commit()
+    conn.close()
 
-def remove_game(session_id):
-    if session_id in game_manager:
-        del game_manager[session_id]
-        db.update_game_session(session_id, status='completed')
+# Main Menu
+def main_menu(user_id):
+    user = get_user(user_id)
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🎮 Games", callback_data="games"),
+        InlineKeyboardButton("👤 Profile", callback_data="profile"),
+        InlineKeyboardButton("🪙 Balance", callback_data="balance"),
+        InlineKeyboardButton("🏆 Rank", callback_data="rank"),
+        InlineKeyboardButton("📊 Leaderboard", callback_data="leaderboard"),
+        InlineKeyboardButton("🎁 Daily", callback_data="daily"),
+        InlineKeyboardButton("❓ Help", callback_data="help")
+    )
+    return markup
 
-# ============== HELPERS ==============
-def format_number(num):
-    return f"{num:,}"
+# Daily reward
+def check_daily_available(user_id):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("SELECT daily_claim_date FROM users WHERE user_id = ?", (user_id,))
+    last_claim = c.fetchone()
+    conn.close()
+    
+    if not last_claim or not last_claim[0]:
+        return True
+    
+    last_date = datetime.fromisoformat(last_claim[0])
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return last_date < today
 
-def format_time(seconds):
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
+def claim_daily(user_id):
+    if not check_daily_available(user_id):
+        return False
+    
+    reward = 250
+    update_user_balance(user_id, reward)
+    add_transaction(user_id, "daily", reward, "Daily reward")
+    
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET daily_claim_date = ? WHERE user_id = ?", 
+              (datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    return True
 
-def get_rank_from_coins(coins):
-    for r in reversed(RANKS):
-        if coins >= r['threshold']:
-            return r['name']
-    return RANKS[0]['name']
+# Dice system
+def get_dice_rolls(user_id):
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("SELECT dice_rolls_today, dice_last_reset FROM users WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    conn.close()
+    
+    if not result or not result[1]:
+        return 0
+    
+    last_reset = datetime.fromisoformat(result[1])
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    if last_reset < today:
+        # Reset rolls
+        conn = sqlite3.connect('zynox_bot.db')
+        c = conn.cursor()
+        c.execute("UPDATE users SET dice_rolls_today = 0, dice_last_reset = ? WHERE user_id = ?", 
+                  (datetime.now().isoformat(), user_id))
+        conn.commit()
+        conn.close()
+        return 0
+    
+    return result[0] if result else 0
 
-def is_owner(user_id):
-    return user_id == OWNER_ID
+def roll_dice(user_id):
+    rolls_left = 6 - get_dice_rolls(user_id)
+    if rolls_left <= 0:
+        return None, 0
+    
+    roll = random.randint(1, 6)
+    rewards = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50, 6: 100}
+    reward = rewards[roll]
+    
+    update_user_balance(user_id, reward)
+    add_transaction(user_id, "dice", reward, f"Dice roll {roll}")
+    
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("""UPDATE users 
+                 SET dice_rolls_today = dice_rolls_today + 1,
+                     dice_last_reset = ? 
+                 WHERE user_id = ?""",
+              (datetime.now().isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    
+    new_rolls_left = 6 - get_dice_rolls(user_id)
+    return roll, new_rolls_left
 
-def is_group(chat_type):
-    return chat_type in ['group', 'supergroup']
+# Tic Tac Toe Game Logic
+class TicTacToe:
+    def __init__(self):
+        self.board = [' '] * 9
+        self.current_player = 'X'
+        
+    def make_move(self, position):
+        if self.board[position] == ' ':
+            self.board[position] = self.current_player
+            if self.check_winner():
+                return self.current_player
+            self.current_player = 'O' if self.current_player == 'X' else 'X'
+            return None
+        return False
+    
+    def check_winner(self):
+        win_patterns = [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8],  # Rows
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],  # Columns
+            [0, 4, 8], [2, 4, 6]              # Diagonals
+        ]
+        for pattern in win_patterns:
+            if self.board[pattern[0]] == self.board[pattern[1]] == self.board[pattern[2]] != ' ':
+                return self.board[pattern[0]]
+        if ' ' not in self.board:
+            return 'draw'
+        return None
+    
+    def get_board_display(self):
+        display = []
+        for i in range(0, 9, 3):
+            row = [f"{j+1}️⃣" if self.board[i+j] == ' ' else self.board[i+j] for j in range(3)]
+            display.append(" ".join(row))
+        return "\n".join(display)
 
-def check_banned(user_id):
-    if db.is_user_banned(user_id):
-        raise ValueError("You are banned from using this bot.")
+# Game Lobby Management
+active_matches = {}
 
-# ============== START COMMAND ==============
+def create_match(game_type, host_id, bet_amount):
+    match_id = f"{game_type}_{host_id}_{int(time.time())}"
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    
+    c.execute("""INSERT INTO matches 
+                 (match_id, game_type, host_id, bet_amount, prize_pool, status, board, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (match_id, game_type, host_id, bet_amount, bet_amount * 2, 'waiting', 
+               json.dumps({'board': [' ']*9}), datetime.now().isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    
+    active_matches[match_id] = {
+        'game_type': game_type,
+        'host_id': host_id,
+        'player2_id': None,
+        'bet_amount': bet_amount,
+        'prize_pool': bet_amount * 2,
+        'status': 'waiting',
+        'game_instance': TicTacToe() if game_type == 'ttt' else None
+    }
+    return match_id
+
+def join_match(match_id, player2_id):
+    if match_id not in active_matches:
+        return False
+    
+    match = active_matches[match_id]
+    if match['status'] != 'waiting' or player2_id == match['host_id']:
+        return False
+    
+    # Check if player has enough coins
+    if get_user_balance(player2_id) < match['bet_amount']:
+        return False
+    
+    match['player2_id'] = player2_id
+    match['status'] = 'active'
+    
+    # Deduct bets
+    update_user_balance(match['host_id'], -match['bet_amount'])
+    update_user_balance(player2_id, -match['bet_amount'])
+    
+    add_transaction(match['host_id'], 'bet', -match['bet_amount'], f"{match['game_type']} bet")
+    add_transaction(player2_id, 'bet', -match['bet_amount'], f"{match['game_type']} bet")
+    
+    return True
+
+def handle_move(match_id, player_id, position):
+    if match_id not in active_matches:
+        return None
+    
+    match = active_matches[match_id]
+    if match['status'] != 'active':
+        return None
+    
+    game = match['game_instance']
+    if (game.current_player == 'X' and player_id != match['host_id']) or \
+       (game.current_player == 'O' and player_id != match['player2_id']):
+        return None
+    
+    result = game.make_move(position)
+    if result is False:
+        return None
+    
+    # Check game result
+    if result is not None:
+        match['status'] = 'completed'
+        return result
+    
+    # Update board in database
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("UPDATE matches SET board = ?, updated_at = ? WHERE match_id = ?", 
+              (json.dumps({'board': game.board}), datetime.now().isoformat(), match_id))
+    conn.commit()
+    conn.close()
+    
+    return 'continue'
+
+def settle_match(match_id, winner_id):
+    if match_id not in active_matches:
+        return False
+    
+    match = active_matches[match_id]
+    if match['status'] != 'active':
+        return False
+    
+    match['status'] = 'completed'
+    
+    # Calculate winnings (95% of pool)
+    prize_pool = match['prize_pool']
+    fee = int(prize_pool * 0.05)
+    winnings = prize_pool - fee
+    
+    # Update winner's balance
+    update_user_balance(winner_id, winnings)
+    add_transaction(winner_id, 'win', winnings, f"{match['game_type']} win")
+    
+    # Update bot wallet
+    update_bot_wallet(fee)
+    
+    # Update stats
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET games_played = games_played + 1 WHERE user_id = ?", (winner_id,))
+    # Update XP (50 for win)
+    c.execute("UPDATE users SET xp = xp + 50 WHERE user_id = ?", (winner_id,))
+    # Update loser XP (10 for loss)
+    loser_id = match['host_id'] if match['host_id'] != winner_id else match['player2_id']
+    c.execute("UPDATE users SET xp = xp + 10, losses = losses + 1 WHERE user_id = ?", (loser_id,))
+    conn.commit()
+    conn.close()
+    
+    # Update match in database
+    conn = sqlite3.connect('zynox_bot.db')
+    c = conn.cursor()
+    c.execute("UPDATE matches SET winner_id = ?, status = ?, updated_at = ? WHERE match_id = ?", 
+              (winner_id, 'completed', datetime.now().isoformat(), match_id))
+    conn.commit()
+    conn.close()
+    
+    return True
+
+# Bot Commands
 @bot.message_handler(commands=['start'])
 def handle_start(message):
-    user_id = message.from_user.id
-    chat_type = message.chat.type
-    
-    if is_group(chat_type):
-        bot.reply_to(message, "⚠️ Please use /start in private chat with the bot.")
+    if message.chat.type == 'group' or message.chat.type == 'supergroup':
+        bot.reply_to(message, "❌ Please use /start in DM only!")
         return
     
-    try:
-        check_banned(user_id)
-        user = db.get_user(user_id, message.from_user.username or '', message.from_user.first_name or 'User')
-        
-        welcome = f"""🎮 <b>WELCOME TO ZYNOX GAMING</b> 🎮
-
-👤 Welcome, {user['first_name']}!
-
-<b>🌟 Premium Gaming Experience</b>
-
-🎯 <b>GAMES</b>
-Play exciting games and earn coins!
-Blackjack, Card, Dice, RPS & more!
-
-💰 <b>ECONOMY</b>
-Earn coins through games and daily claims
-Rob other players (if you dare!)
-Protect your hard-earned coins
-
-🏆 <b>RANK & LEVEL</b>
-• Rank based on coin balance
-• Level up through activity & XP
-
-⚔️ <b>FEATURES</b>
-• PvP & PvE game modes
-• Global & Group leaderboards
-
-📊 <b>YOUR STATS</b>
-💰 Coins: {format_number(user['coins'])}
-🏅 Rank: {get_rank_from_coins(user['coins'])}
-⭐ Level: {user['level']}
-🎮 Games: {user['total_games']}
-
-🎮 Ready to play? Choose an option below!"""
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_play = types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games")
-        btn_help = types.InlineKeyboardButton("📚 HELP", callback_data="menu_help")
-        btn_support = types.InlineKeyboardButton("📢 SUPPORT", callback_data="menu_support")
-        markup.add(btn_play)
-        markup.add(btn_help, btn_support)
-        
-        bot.send_message(user_id, welcome, reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in start: {e}")
-        bot.send_message(user_id, "❌ An error occurred. Please try again later.")
-
-# ============== HELP COMMAND ==============
-@bot.message_handler(commands=['help'])
-def handle_help(message):
     user_id = message.from_user.id
-    chat_type = message.chat.type
+    username = message.from_user.username or "No username"
+    first_name = message.from_user.first_name or "User"
     
-    if is_group(chat_type):
-        bot.reply_to(message, "⚠️ Please use /help in private chat with the bot.")
+    # Check if user exists
+    user = get_user(user_id)
+    if not user:
+        create_user(user_id, username, first_name)
+    
+    welcome = f"""╔══════════════════════╗
+🎮 ZYNOX GAMING
+╚══════════════════════╝
+
+👋 Welcome, {first_name}! 🎮
+
+╔══════════════════════╗
+🎯 Your Gaming Hub
+╚══════════════════════╝
+
+⚡ Play Games
+🪙 Earn Coins
+⭐ Level Up
+🏆 Compete Globally
+
+📢 Support: {SUPPORT_CHANNEL}
+👥 Group: {SUPPORT_GROUP}
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 Ready to Play?
+━━━━━━━━━━━━━━━━━━━━━━"""
+    
+    bot.send_message(user_id, welcome, reply_markup=main_menu(user_id))
+
+@bot.message_handler(commands=['daily'])
+def handle_daily(message):
+    if message.chat.type == 'group' or message.chat.type == 'supergroup':
+        bot.reply_to(message, "❌ Please use /daily in DM only!")
         return
     
-    try:
-        check_banned(user_id)
-        show_help_menu(user_id)
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in help: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-def show_help_menu(user_id):
-    help_text = """📚 <b>ZYNOX HELP MENU</b>
-
-Select a category to learn more:"""
+    user_id = message.from_user.id
     
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_games = types.InlineKeyboardButton("🎮 GAMES", callback_data="help_games")
-    btn_economy = types.InlineKeyboardButton("💰 ECONOMY", callback_data="help_economy")
-    btn_profile = types.InlineKeyboardButton("👤 PROFILE", callback_data="help_profile")
-    btn_back = types.InlineKeyboardButton("🔙 BACK", callback_data="menu_main")
-    markup.add(btn_games, btn_economy)
-    markup.add(btn_profile)
-    markup.add(btn_back)
+    if claim_daily(user_id):
+        balance = get_user_balance(user_id)
+        response = f"""╔══════════════════════╗
+🎁 DAILY REWARD
+╚══════════════════════╝
+
+🎉 Daily Reward Claimed!
+
+🪙 +250 Coins
+💰 Balance : {balance}
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 Come Back Tomorrow!
+━━━━━━━━━━━━━━━━━━━━━━"""
+        bot.reply_to(message, response)
+    else:
+        bot.reply_to(message, "❌ You've already claimed your daily reward today!\nCome back tomorrow at 12:00 AM IST.")
+
+@bot.message_handler(commands=['dice'])
+def handle_dice(message):
+    if message.chat.type == 'group' or message.chat.type == 'supergroup':
+        # Check support channel/group membership here
+        pass
     
-    bot.send_message(user_id, help_text, reply_markup=markup, parse_mode='HTML')
-
-def show_games_help(user_id):
-    text = """🎮 <b>GAME COMMANDS</b>
-
-🃏 /blackjack - Play Blackjack vs Bot (50 coins)
-🃏 /card - Higher Card Challenge (20 coins)
-🎲 /dice - Dice Duel (25 coins)
-🪙 /coinflip - Coin Flip (15 coins)
-✂️ /rps - Rock Paper Scissors (20 coins)
-⭕ /tictactoe - Tic Tac Toe (40 coins)
-⚡ /fasttype - Fast Type Challenge (35 coins)
-❓ /quiz - Quiz Challenge (30 coins)
-😀 /emoji - Emoji Guess (25 coins)
-🔢 /guess - Number Guess (20 coins)
-
-<b>📌 PvP:</b> Reply to user with /game"""
+    user_id = message.from_user.id
+    roll, rolls_left = roll_dice(user_id)
     
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="help_menu"))
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode='HTML')
-
-def show_economy_help(user_id):
-    text = """💰 <b>ECONOMY COMMANDS</b>
-
-<b>/bal</b> - Check balance
-<b>/claim</b> - Daily or group claim
-<b>/rob</b> - Rob other users (max 10,000)
-<b>/protect</b> - 24-hour protection
-<b>/leaderboard</b> - Global ranking
-<b>/grouprank</b> - Group ranking"""
+    if roll is None:
+        bot.reply_to(message, "❌ No rolls left today! Come back tomorrow at 12:00 AM IST.")
+        return
     
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="help_menu"))
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode='HTML')
-
-def show_profile_help(user_id):
-    text = """👤 <b>PROFILE COMMANDS</b>
-
-<b>/profile</b> - View your gaming profile
-<b>/stats</b> - Detailed game statistics"""
+    balance = get_user_balance(user_id)
     
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="help_menu"))
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode='HTML')
+    if roll == 6:
+        response = f"""╔══════════════════════╗
+⚡ STRIKE ⚡
+╚══════════════════════╝
 
-# ============== PROFILE ==============
+🎲 Roll Result : 6️⃣
+
+💥 STRIKE!
+
+🪙 Reward : +100 Coins
+💰 Balance : {balance}
+
+🎯 Rolls Left : {rolls_left}/6
+
+━━━━━━━━━━━━━━━━━━━━━━"""
+    else:
+        reward = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50}[roll]
+        response = f"""╔══════════════════════╗
+🎲 DICE ROLL
+╚══════════════════════╝
+
+🎲 Roll Result : {roll}️⃣
+
+🪙 Reward : +{reward} Coins
+💰 Balance : {balance}
+
+🎯 Rolls Left : {rolls_left}/6
+
+━━━━━━━━━━━━━━━━━━━━━━"""
+    
+    bot.reply_to(message, response)
+
 @bot.message_handler(commands=['profile'])
 def handle_profile(message):
     user_id = message.from_user.id
+    user = get_user(user_id)
     
-    try:
-        check_banned(user_id)
-        user = db.get_user(user_id, message.from_user.username or '', message.from_user.first_name or 'User')
-        stats = db.get_user_game_stats(user_id)
-        
-        total_played = sum(s.get('played', 0) for s in stats.values())
-        total_wins = sum(s.get('wins', 0) for s in stats.values())
-        total_losses = sum(s.get('losses', 0) for s in stats.values())
-        win_rate = (total_wins / total_played * 100) if total_played > 0 else 0
-        
-        rank = get_rank_from_coins(user['coins'])
-        global_rank = db.get_global_rank(user_id)
-        protected, remaining = db.get_protection(user_id)
-        
-        text = f"""<b>{rank} PROFILE</b>
+    if not user:
+        bot.reply_to(message, "❌ Please start the bot first with /start")
+        return
+    
+    response = f"""╔══════════════════════╗
+👤 PROFILE
+╚══════════════════════╝
 
-👤 Name: {user['first_name']}
-📛 Username: @{user['username'] or 'N/A'}
+👤 Name: {user[2]}
+🆔 ID: {user[0]}
+⭐ XP: {user[4]}
+📈 Level: {user[5]}
+🪙 Coins: {user[3]}
+🎮 Games: {user[7]}
+🏆 Wins: {user[8]}
+💔 Losses: {user[9]}
+📊 Win Rate: {calculate_win_rate(user[8], user[7])}
+🥇 Rank: {user[6]}
 
-━━━━━━━━━━━━━━━━━
-💰 Coins: {format_number(user['coins'])}
-🏅 Rank: {rank}
-⭐ Level: {user['level']}
-✨ XP: {format_number(user['xp'])}
-━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━"""
+    bot.reply_to(message, response)
 
-📊 GAME STATISTICS
-🎮 Games: {total_played}
-✅ Wins: {total_wins}
-❌ Losses: {total_losses}
-📈 Win Rate: {win_rate:.1f}%
-
-🌍 Global Rank: #{global_rank}"""
-        
-        if protected:
-            text += f"\n🛡️ Protected: ✅ ({format_time(remaining)} remaining)"
-        else:
-            text += "\n🛡️ Protected: ❌"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📊 STATS", callback_data=f"view_stats_{user_id}"))
-        markup.add(types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
-        
-        bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in profile: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== STATS ==============
-@bot.message_handler(commands=['stats'])
-def handle_stats(message):
+@bot.message_handler(commands=['rank'])
+def handle_rank(message):
     user_id = message.from_user.id
+    user = get_user(user_id)
     
-    try:
-        check_banned(user_id)
-        user = db.get_user(user_id, message.from_user.username or '', message.from_user.first_name or 'User')
-        stats = db.get_user_game_stats(user_id)
-        
-        total_played = sum(s.get('played', 0) for s in stats.values())
-        total_wins = sum(s.get('wins', 0) for s in stats.values())
-        total_losses = sum(s.get('losses', 0) for s in stats.values())
-        win_rate = (total_wins / total_played * 100) if total_played > 0 else 0
-        
-        text = f"""📊 <b>GAME STATISTICS</b>
+    if not user:
+        bot.reply_to(message, "❌ Please start the bot first with /start")
+        return
+    
+    level, next_level_xp = calculate_level(user[4])
+    xp_to_next = next_level_xp - user[4] if level < 100 else 0
+    
+    response = f"""╔══════════════════════╗
+🏆 YOUR RANK
+╚══════════════════════╝
 
-👤 Player: {user['first_name']}
+👤 {user[2]}
 
-━━━━━━━━━━━━━━━━━
-🎮 Total Games: {total_played}
-✅ Wins: {total_wins}
-❌ Losses: {total_losses}
-📈 Win Rate: {win_rate:.1f}%
-━━━━━━━━━━━━━━━━━
+⭐ Level : {user[5]}
+📈 XP : {user[4]} / {next_level_xp}
 
-<b>📋 PER-GAME STATS</b>"""
-        
-        games = {
-            'blackjack': '🃏 Blackjack',
-            'card': '🃏 Card',
-            'dice': '🎲 Dice',
-            'coinflip': '🪙 Coin Flip',
-            'rps': '✂️ RPS',
-            'tictactoe': '⭕ Tic Tac Toe',
-            'fasttype': '⚡ Fast Type',
-            'quiz': '❓ Quiz',
-            'emoji': '😀 Emoji',
-            'guess': '🔢 Guess'
-        }
-        
-        for key, name in games.items():
-            s = stats.get(key, {})
-            played = s.get('played', 0)
-            wins = s.get('wins', 0)
-            if played > 0:
-                text += f"\n{name}: {played} played, {wins} wins ({wins/played*100:.0f}%)"
+🥇 Rank : {user[6]}
+
+🌎 Global : #N/A
+👥 This Group : #N/A
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 {xp_to_next} XP to Level {user[5] + 1}
+━━━━━━━━━━━━━━━━━━━━━━"""
+    bot.reply_to(message, response)
+
+@bot.message_handler(commands=['ttt'])
+def handle_ttt(message):
+    if message.chat.type == 'group' or message.chat.type == 'supergroup':
+        handle_pvp_game(message, 'ttt')
+    else:
+        handle_dm_practice(message, 'ttt')
+
+def handle_pvp_game(message, game_type):
+    args = message.text.split()
+    if len(args) != 2 or not args[1].isdigit():
+        bot.reply_to(message, f"❌ Usage: /{game_type} <amount>\nMinimum bet: 50 coins")
+        return
+    
+    bet_amount = int(args[1])
+    if bet_amount < 50:
+        bot.reply_to(message, "❌ Minimum bet is 50 coins!")
+        return
+    
+    user_id = message.from_user.id
+    balance = get_user_balance(user_id)
+    
+    if balance < bet_amount:
+        bot.reply_to(message, f"❌ Insufficient balance! You have {balance} coins.")
+        return
+    
+    # Create match
+    match_id = create_match(game_type, user_id, bet_amount)
+    
+    # Create game lobby message
+    game_names = {'ttt': 'TIC TAC TOE', 'rps': 'RPS BATTLE'}
+    game_emojis = {'ttt': '🎮', 'rps': '✊'}
+    
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🎮 JOIN GAME", callback_data=f"join_{match_id}"))
+    
+    response = f"""╔══════════════════════╗
+{game_emojis[game_type]} {game_names[game_type]}
+╚══════════════════════╝
+
+👤 Host : @{message.from_user.username or "Player"}
+
+🪙 Entry : {bet_amount} Coins
+🏆 Prize Pool : {bet_amount * 2} Coins
+🏦 Fee : 5%
+
+━━━━━━━━━━━━━━━━━━━━━━
+⚡ Waiting for Player 2
+━━━━━━━━━━━━━━━━━━━━━━"""
+    
+    bot.reply_to(message, response, reply_markup=markup)
+
+def handle_dm_practice(message, game_type):
+    # DM Practice Mode
+    if game_type == 'ttt':
+        game = TicTacToe()
+        markup = create_ttt_board(game, None, practice=True)
+        bot.reply_to(message, "🎮 Practice Mode - No Coins/XP", reply_markup=markup)
+    elif game_type == 'rps':
+        markup = InlineKeyboardMarkup(row_width=3)
+        markup.add(
+            InlineKeyboardButton("🪨 ROCK", callback_data="practice_rps_rock"),
+            InlineKeyboardButton("📄 PAPER", callback_data="practice_rps_paper"),
+            InlineKeyboardButton("✂️ SCISSORS", callback_data="practice_rps_scissors")
+        )
+        bot.reply_to(message, "✊ Practice Mode - Choose your move!", reply_markup=markup)
+
+def create_ttt_board(game, match_id=None, practice=False):
+    markup = InlineKeyboardMarkup(row_width=3)
+    board = game.board
+    
+    for i in range(0, 9, 3):
+        buttons = []
+        for j in range(3):
+            pos = i + j
+            if board[pos] == ' ':
+                if practice:
+                    callback = f"practice_ttt_{pos}"
+                else:
+                    callback = f"ttt_move_{match_id}_{pos}"
+                text = f"{pos + 1}️⃣"
             else:
-                text += f"\n{name}: Not played yet"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("👤 PROFILE", callback_data=f"view_profile_{user_id}"))
-        markup.add(types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
-        
-        bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in stats: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
+                text = board[pos]
+                callback = "none"
+            buttons.append(InlineKeyboardButton(text, callback_data=callback))
+        markup.row(*buttons)
+    
+    if not practice:
+        markup.add(InlineKeyboardButton("❌ Cancel Game", callback_data=f"cancel_{match_id}"))
+    
+    return markup
 
-# ============== BALANCE ==============
-@bot.message_handler(commands=['bal'])
-def handle_balance(message):
-    user_id = message.from_user.id
-    target_id = user_id
-    
-    if message.reply_to_message:
-        target_id = message.reply_to_message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        user = db.get_user(target_id)
-        rank = get_rank_from_coins(user['coins'])
-        protected, remaining = db.get_protection(target_id)
-        global_rank = db.get_global_rank(target_id)
-        
-        text = f"""💰 <b>BALANCE</b>
-
-👤 User: {user['first_name']} (@{user['username'] or 'N/A'})
-💵 Coins: {format_number(user['coins'])}
-🏅 Rank: {rank}
-⭐ Level: {user['level']}
-🌍 Global Rank: #{global_rank}"""
-        
-        if protected:
-            text += f"\n🛡️ Protected: ✅ ({format_time(remaining)} remaining)"
-        else:
-            text += "\n🛡️ Protected: ❌"
-        
-        bot.reply_to(message, text, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in balance: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== LEADERBOARD ==============
-@bot.message_handler(commands=['leaderboard'])
-def handle_leaderboard(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        top = db.get_top_users_by_coins(10)
-        user = db.get_user(user_id)
-        
-        text = "🌍 <b>GLOBAL LEADERBOARD</b>\n\n"
-        medals = ['🥇', '🥈', '🥉']
-        
-        for i, u in enumerate(top):
-            medal = medals[i] if i < 3 else f"#{i+1}"
-            text += f"{medal} @{u['username'] or 'User'} — {format_number(u['coins'])} coins\n"
-        
-        text += f"\n📊 Your Rank: #{db.get_global_rank(user_id)} (Coins: {format_number(user['coins'])})"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🎮 PLAY", callback_data="menu_games"))
-        
-        bot.reply_to(message, text, reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in leaderboard: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== GROUP RANK ==============
-@bot.message_handler(commands=['grouprank'])
-def handle_group_rank(message):
-    chat_type = message.chat.type
-    
-    if not is_group(chat_type):
-        bot.reply_to(message, "⚠️ This command can only be used in groups.")
-        return
-    
-    bot.reply_to(message, "📊 Group ranking feature is being developed. Stay tuned!")
-
-# ============== CLAIM ==============
-@bot.message_handler(commands=['claim'])
-def handle_claim(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    chat_type = message.chat.type
-    
-    try:
-        check_banned(user_id)
-        
-        if is_group(chat_type):
-            if db.get_group_claim_status(chat_id):
-                bot.reply_to(message, "❌ <b>GROUP REWARD ALREADY CLAIMED</b>\n\nThis group has already received its one-time 10,000 coin reward.", parse_mode='HTML')
-                return
-            
-            try:
-                chat = bot.get_chat(chat_id)
-                member_count = chat.get_member_count() if hasattr(chat, 'get_member_count') else 0
-                if member_count < 500:
-                    bot.reply_to(message, f"❌ <b>GROUP REWARD LOCKED</b>\n\nThis group has {member_count} members.\nNeed at least 500 members.\n\n👥 Members: {member_count}/500", parse_mode='HTML')
-                    return
-            except:
-                pass
-            
-            if db.claim_group_reward(chat_id, user_id):
-                try:
-                    chat = bot.get_chat(chat_id)
-                    db.update_group_info(chat_id, chat.title, chat.get_member_count() if hasattr(chat, 'get_member_count') else 0)
-                except:
-                    pass
-                
-                bot.reply_to(message, f"🎉 <b>GROUP REWARD CLAIMED!</b>\n\n👥 Group: {message.chat.title or 'This Group'}\n👤 Claimed By: @{message.from_user.username or 'N/A'}\n\n💰 +{format_number(GROUP_CLAIM_REWARD)} Coins", parse_mode='HTML')
-            else:
-                bot.reply_to(message, "❌ Failed to claim group reward.")
-        else:
-            can_claim, remaining = db.can_claim_daily(user_id)
-            
-            if not can_claim:
-                bot.reply_to(message, f"⏳ <b>DAILY CLAIM COOLDOWN</b>\n\nNext claim available in: {format_time(remaining)}", parse_mode='HTML')
-                return
-            
-            reward = db.claim_daily(user_id)
-            user = db.get_user(user_id)
-            
-            bot.reply_to(message, f"🎉 <b>DAILY REWARD CLAIMED!</b>\n\n💰 +{format_number(reward)} Coins\n⭐ +{XP_REWARDS['claim']} XP\n\n📊 New Balance: {format_number(user['coins'])} coins\n🏅 Rank: {get_rank_from_coins(user['coins'])}\n⭐ Level: {user['level']}", parse_mode='HTML')
-            
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in claim: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== PROTECT ==============
-@bot.message_handler(commands=['protect'])
-def handle_protect(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        protected, remaining = db.get_protection(user_id)
-        
-        if protected:
-            bot.reply_to(message, f"🛡️ <b>ALREADY PROTECTED</b>\n\n⏳ Remaining: {format_time(remaining)}\n\nYour coins are currently safe.", parse_mode='HTML')
-        else:
-            db.set_protection(user_id)
-            bot.reply_to(message, "🛡️ <b>PROTECTION ACTIVATED</b>\n\n⏰ Duration: 24 Hours\n\nYour coins are now protected from robbery.", parse_mode='HTML')
-            
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in protect: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== ROB ==============
-@bot.message_handler(commands=['rob'])
-def handle_rob(message):
-    user_id = message.from_user.id
-    chat_type = message.chat.type
-    
-    if not is_group(chat_type):
-        bot.reply_to(message, "⚠️ Rob command can only be used in groups.")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "⚠️ Reply to the user you want to rob with /rob")
-        return
-    
-    target_id = message.reply_to_message.from_user.id
-    
-    if target_id == user_id:
-        bot.reply_to(message, "❌ You cannot rob yourself!")
-        return
-    
-    if target_id == OWNER_ID:
-        bot.reply_to(message, "❌ You cannot rob the bot owner!")
-        return
-    
-    try:
-        check_banned(user_id)
-        
-        protected, remaining = db.get_protection(target_id)
-        if protected:
-            bot.reply_to(message, f"❌ <b>ROB FAILED</b>\n\n🛡️ @{message.reply_to_message.from_user.username or 'User'} is protected.\n\n⏳ Protection remaining: {format_time(remaining)}", parse_mode='HTML')
-            return
-        
-        target = db.get_user(target_id)
-        if target['coins'] <= 0:
-            bot.reply_to(message, "❌ This user has no coins to rob!")
-            return
-        
-        rob_amount = random.randint(100, min(ROB_MAX_AMOUNT, target['coins']))
-        
-        db.update_user_coins(target_id, -rob_amount)
-        db.update_user_coins(user_id, rob_amount)
-        
-        robber = db.get_user(user_id)
-        
-        bot.reply_to(message, f"✅ <b>ROB SUCCESSFUL!</b>\n\n👤 Robber: @{message.from_user.username or 'N/A'}\n🎯 Target: @{message.reply_to_message.from_user.username or 'N/A'}\n\n💰 Stolen: {format_number(rob_amount)} coins\n\n📊 Robber's Balance: {format_number(robber['coins'])} coins\n📊 Target's Balance: {format_number(target['coins'] - rob_amount)} coins", parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in rob: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== GAMES ==============
-
-# Blackjack
-@bot.message_handler(commands=['blackjack'])
-def handle_blackjack(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    
-    try:
-        check_banned(user_id)
-        
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-            if target_id == user_id:
-                bot.reply_to(message, "❌ You cannot play against yourself!")
-                return
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_accept = types.InlineKeyboardButton("✅ Accept", callback_data=f"bj_accept_{user_id}_{target_id}")
-            btn_decline = types.InlineKeyboardButton("❌ Decline", callback_data=f"bj_decline_{user_id}_{target_id}")
-            markup.add(btn_accept, btn_decline)
-            
-            bot.reply_to(message, f"🎯 <b>BLACKJACK CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['blackjack']} coins", reply_markup=markup, parse_mode='HTML')
-        else:
-            suits = ['♠', '♥', '♦', '♣']
-            values = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
-            
-            def get_card():
-                return random.choice(values) + random.choice(suits)
-            
-            def card_value(c):
-                v = c[:-1]
-                if v.isdigit():
-                    return int(v)
-                if v in ['J','Q','K']:
-                    return 10
-                return 11
-            
-            def hand_total(hand):
-                total = sum(card_value(c) for c in hand)
-                aces = sum(1 for c in hand if c.startswith('A'))
-                while total > 21 and aces > 0:
-                    total -= 10
-                    aces -= 1
-                return total
-            
-            player_cards = [get_card(), get_card()]
-            bot_cards = [get_card(), get_card()]
-            
-            session_id = create_game(chat_id, 'blackjack', user_id)
-            update_game(session_id, state='playing', moves={
-                'player_cards': player_cards,
-                'bot_cards': bot_cards,
-                'player_total': hand_total(player_cards),
-                'bot_total': hand_total(bot_cards)
-            })
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_hit = types.InlineKeyboardButton("➕ HIT", callback_data=f"bj_hit_{session_id}")
-            btn_stand = types.InlineKeyboardButton("✋ STAND", callback_data=f"bj_stand_{session_id}")
-            markup.add(btn_hit, btn_stand)
-            
-            bot.reply_to(message, f"🃏 <b>BLACKJACK</b>\n\n👤 Your Hand: {' '.join(player_cards)} = {hand_total(player_cards)}\n🤖 Bot Hand: {bot_cards[0]} ?\n\nChoose your action:", reply_markup=markup, parse_mode='HTML')
-            
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in blackjack: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Card
-@bot.message_handler(commands=['card'])
-def handle_card(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-            if target_id == user_id:
-                bot.reply_to(message, "❌ You cannot play against yourself!")
-                return
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_accept = types.InlineKeyboardButton("✅ Accept", callback_data=f"card_accept_{user_id}_{target_id}")
-            btn_decline = types.InlineKeyboardButton("❌ Decline", callback_data=f"card_decline_{user_id}_{target_id}")
-            markup.add(btn_accept, btn_decline)
-            
-            bot.reply_to(message, f"🎯 <b>CARD CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['card']} coins", reply_markup=markup, parse_mode='HTML')
-        else:
-            suits = ['♠', '♥', '♦', '♣']
-            values = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
-            
-            def get_card():
-                return random.choice(values) + random.choice(suits)
-            
-            def card_value(c):
-                v = c[:-1]
-                if v.isdigit():
-                    return int(v)
-                if v in ['J','Q','K']:
-                    return 10
-                return 11
-            
-            player = get_card()
-            bot_card = get_card()
-            p_val = card_value(player)
-            b_val = card_value(bot_card)
-            
-            if p_val > b_val:
-                db.update_user_coins(user_id, GAME_REWARDS['card'])
-                db.update_user_xp(user_id, XP_REWARDS['win'])
-                db.update_game_stats(user_id, 'card', 'win')
-                result = f"🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['card']} coins"
-            elif p_val < b_val:
-                db.update_game_stats(user_id, 'card', 'loss')
-                result = "❌ <b>YOU LOSE!</b>\nBetter luck next time!"
-            else:
-                db.update_game_stats(user_id, 'card', 'draw')
-                result = "🤝 <b>IT'S A TIE!</b>"
-            
-            bot.reply_to(message, f"🃏 <b>HIGHER CARD</b>\n\n👤 Your Card: {player} = {p_val}\n🤖 Bot Card: {bot_card} = {b_val}\n\n{result}", parse_mode='HTML')
-            
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in card: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Dice
-@bot.message_handler(commands=['dice'])
-def handle_dice(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-            if target_id == user_id:
-                bot.reply_to(message, "❌ You cannot play against yourself!")
-                return
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_accept = types.InlineKeyboardButton("✅ Accept", callback_data=f"dice_accept_{user_id}_{target_id}")
-            btn_decline = types.InlineKeyboardButton("❌ Decline", callback_data=f"dice_decline_{user_id}_{target_id}")
-            markup.add(btn_accept, btn_decline)
-            
-            bot.reply_to(message, f"🎯 <b>DICE CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['dice']} coins", reply_markup=markup, parse_mode='HTML')
-        else:
-            player = random.randint(1, 6)
-            bot_roll = random.randint(1, 6)
-            
-            if player > bot_roll:
-                db.update_user_coins(user_id, GAME_REWARDS['dice'])
-                db.update_user_xp(user_id, XP_REWARDS['win'])
-                db.update_game_stats(user_id, 'dice', 'win')
-                result = f"🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['dice']} coins"
-            elif player < bot_roll:
-                db.update_game_stats(user_id, 'dice', 'loss')
-                result = "❌ <b>YOU LOSE!</b>\nBetter luck next time!"
-            else:
-                db.update_game_stats(user_id, 'dice', 'draw')
-                result = "🤝 <b>IT'S A TIE!</b>"
-            
-            bot.reply_to(message, f"🎲 <b>DICE DUEL</b>\n\n👤 Your Roll: 🎲 {player}\n🤖 Bot Roll: 🎲 {bot_roll}\n\n{result}", parse_mode='HTML')
-            
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in dice: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Coin Flip
-@bot.message_handler(commands=['coinflip'])
-def handle_coinflip(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_heads = types.InlineKeyboardButton("🪙 HEADS", callback_data=f"cf_heads_{user_id}")
-        btn_tails = types.InlineKeyboardButton("🪙 TAILS", callback_data=f"cf_tails_{user_id}")
-        markup.add(btn_heads, btn_tails)
-        
-        bot.reply_to(message, "🪙 <b>COIN FLIP</b>\n\nChoose heads or tails:", reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in coinflip: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# RPS
-@bot.message_handler(commands=['rps'])
-def handle_rps(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-            if target_id == user_id:
-                bot.reply_to(message, "❌ You cannot play against yourself!")
-                return
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_accept = types.InlineKeyboardButton("✅ Accept", callback_data=f"rps_accept_{user_id}_{target_id}")
-            btn_decline = types.InlineKeyboardButton("❌ Decline", callback_data=f"rps_decline_{user_id}_{target_id}")
-            markup.add(btn_accept, btn_decline)
-            
-            bot.reply_to(message, f"🎯 <b>RPS CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['rps']} coins", reply_markup=markup, parse_mode='HTML')
-        else:
-            markup = types.InlineKeyboardMarkup(row_width=3)
-            btn_rock = types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_bot_rock_{user_id}")
-            btn_paper = types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_bot_paper_{user_id}")
-            btn_scissors = types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_bot_scissors_{user_id}")
-            markup.add(btn_rock, btn_paper, btn_scissors)
-            
-            bot.reply_to(message, "✂️ <b>ROCK PAPER SCISSORS</b>\n\nChoose your move:", reply_markup=markup, parse_mode='HTML')
-            
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in rps: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Tic Tac Toe
-@bot.message_handler(commands=['tictactoe'])
-def handle_tictactoe(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        if not message.reply_to_message:
-            bot.reply_to(message, "⚠️ Reply to the user you want to challenge with /tictactoe")
-            return
-        
-        target_id = message.reply_to_message.from_user.id
-        if target_id == user_id:
-            bot.reply_to(message, "❌ You cannot play against yourself!")
-            return
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_accept = types.InlineKeyboardButton("✅ Accept", callback_data=f"ttt_accept_{user_id}_{target_id}")
-        btn_decline = types.InlineKeyboardButton("❌ Decline", callback_data=f"ttt_decline_{user_id}_{target_id}")
-        markup.add(btn_accept, btn_decline)
-        
-        bot.reply_to(message, f"🎯 <b>TIC TAC TOE CHALLENGE</b>\n\n👤 @{message.from_user.username or 'User'} challenged @{message.reply_to_message.from_user.username or 'User'}!\n\n💰 Winner: {GAME_REWARDS['tictactoe']} coins", reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in tictactoe: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Fast Type
-@bot.message_handler(commands=['fasttype'])
-def handle_fasttype(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        word = random.choice(FAST_TYPE_WORDS)
-        db.save_fasttype_session(message.chat.id, word)
-        
-        bot.reply_to(message, f"⚡ <b>FAST TYPE CHALLENGE</b>\n\nType this word first to win:\n\n📝 <code>{word}</code>\n\n💰 Winner: {GAME_REWARDS['fasttype']} coins", parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in fasttype: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Quiz
-@bot.message_handler(commands=['quiz'])
-def handle_quiz(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        questions = db.get_all_quiz_questions()
-        if not questions:
-            questions = QUIZ_QUESTIONS
-        
-        q = random.choice(questions)
-        q_id = questions.index(q)
-        session_id = db.save_quiz_session(message.chat.id, q_id, q['correct'])
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        for i, opt in enumerate(q['options']):
-            markup.add(types.InlineKeyboardButton(opt, callback_data=f"quiz_answer_{session_id}_{i}"))
-        
-        bot.reply_to(message, f"❓ <b>QUIZ CHALLENGE</b>\n\n{q['question']}\n\n💰 Winner: {GAME_REWARDS['quiz']} coins", reply_markup=markup, parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in quiz: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Emoji Guess
-@bot.message_handler(commands=['emoji'])
-def handle_emoji(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        questions = db.get_all_emoji_questions()
-        if not questions:
-            questions = EMOJI_QUESTIONS
-        
-        q = random.choice(questions)
-        q_id = questions.index(q)
-        db.save_emoji_session(message.chat.id, q_id, q['answer'])
-        
-        bot.reply_to(message, f"😀 <b>EMOJI GUESS</b>\n\n{q['emojis']}\n\nGuess what this represents!\n\n💰 Winner: {GAME_REWARDS['emoji']} coins", parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in emoji: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# Number Guess
-@bot.message_handler(commands=['guess'])
-def handle_guess(message):
-    user_id = message.from_user.id
-    
-    try:
-        check_banned(user_id)
-        
-        number = random.randint(1, 100)
-        db.save_number_session(message.chat.id, number)
-        
-        bot.reply_to(message, f"🔢 <b>NUMBER GUESS</b>\n\nI'm thinking of a number between 1 and 100.\n\n💰 Winner: {GAME_REWARDS['guess']} coins", parse_mode='HTML')
-        
-    except ValueError as e:
-        bot.send_message(user_id, f"❌ {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in guess: {e}")
-        bot.send_message(user_id, "❌ An error occurred.")
-
-# ============== CALLBACKS ==============
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
-    user_id = call.from_user.id
     data = call.data
     
-    try:
-        check_banned(user_id)
-        
-        # Menu
-        if data == "menu_games":
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            games = [
-                ("🃏 Blackjack", "game_blackjack"),
-                ("🃏 Card", "game_card"),
-                ("🎲 Dice", "game_dice"),
-                ("🪙 Coin Flip", "game_coinflip"),
-                ("✂️ RPS", "game_rps"),
-                ("⭕ Tic Tac Toe", "game_tictactoe"),
-                ("⚡ Fast Type", "game_fasttype"),
-                ("❓ Quiz", "game_quiz"),
-                ("😀 Emoji", "game_emoji"),
-                ("🔢 Guess", "game_guess")
-            ]
-            for name, cb in games:
-                markup.add(types.InlineKeyboardButton(name, callback_data=cb))
-            markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="menu_main"))
-            
-            bot.edit_message_text("🎮 <b>ZYNOX GAMES</b>\n\nSelect a game:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
-        
-        elif data == "menu_help":
-            show_help_menu(user_id)
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        elif data == "menu_support":
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(types.InlineKeyboardButton("📢 Channel", url=SUPPORT_CHANNEL))
-            markup.add(types.InlineKeyboardButton("👥 Group", url=SUPPORT_GROUP))
-            markup.add(types.InlineKeyboardButton("🔙 BACK", callback_data="menu_main"))
-            
-            bot.edit_message_text(f"📢 <b>ZYNOX SUPPORT</b>\n\nJoin our communities:\n\n📢 Channel: {SUPPORT_CHANNEL}\n👥 Group: {SUPPORT_GROUP}", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
-        
-        elif data == "menu_main":
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            handle_start(call.message)
-        
-        elif data == "help_menu":
-            show_help_menu(user_id)
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        elif data == "help_games":
-            show_games_help(user_id)
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        elif data == "help_economy":
-            show_economy_help(user_id)
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        elif data == "help_profile":
-            show_profile_help(user_id)
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        # Game shortcuts
-        elif data.startswith("game_"):
-            game = data.split("_")[1]
-            commands = {
-                'blackjack': '/blackjack',
-                'card': '/card',
-                'dice': '/dice',
-                'coinflip': '/coinflip',
-                'rps': '/rps',
-                'tictactoe': '/tictactoe',
-                'fasttype': '/fasttype',
-                'quiz': '/quiz',
-                'emoji': '/emoji',
-                'guess': '/guess'
-            }
-            if game in commands:
-                dummy = call.message
-                dummy.text = commands[game]
-                dummy.from_user = call.from_user
-                dummy.chat = call.message.chat
-                
-                if game == 'blackjack': handle_blackjack(dummy)
-                elif game == 'card': handle_card(dummy)
-                elif game == 'dice': handle_dice(dummy)
-                elif game == 'coinflip': handle_coinflip(dummy)
-                elif game == 'rps': handle_rps(dummy)
-                elif game == 'tictactoe': handle_tictactoe(dummy)
-                elif game == 'fasttype': handle_fasttype(dummy)
-                elif game == 'quiz': handle_quiz(dummy)
-                elif game == 'emoji': handle_emoji(dummy)
-                elif game == 'guess': handle_guess(dummy)
-                
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-        # Coin Flip
-        elif data.startswith("cf_"):
-            parts = data.split("_")
-            choice = parts[1]
-            player_id = int(parts[2])
-            
-            if player_id != user_id:
-                bot.answer_callback_query(call.id, "❌ This isn't your game!", show_alert=True)
-                return
-            
-            result = random.choice(['heads', 'tails'])
-            
-            if choice == result:
-                db.update_user_coins(user_id, GAME_REWARDS['coinflip'])
-                db.update_user_xp(user_id, XP_REWARDS['win'])
-                db.update_game_stats(user_id, 'coinflip', 'win')
-                text = f"🪙 <b>COIN FLIP</b>\n\nYou chose: {choice.upper()}\nResult: {result.upper()}\n\n🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['coinflip']} coins"
-            else:
-                db.update_game_stats(user_id, 'coinflip', 'loss')
-                text = f"🪙 <b>COIN FLIP</b>\n\nYou chose: {choice.upper()}\nResult: {result.upper()}\n\n❌ <b>YOU LOSE!</b>"
-            
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
-        
-        # RPS Bot
-        elif data.startswith("rps_bot_"):
-            parts = data.split("_")
-            move = parts[2]
-            player_id = int(parts[3])
-            
-            if player_id != user_id:
-                bot.answer_callback_query(call.id, "❌ This isn't your game!", show_alert=True)
-                return
-            
-            bot_move = random.choice(['rock', 'paper', 'scissors'])
-            moves = {'rock': '🪨 Rock', 'paper': '📄 Paper', 'scissors': '✂️ Scissors'}
-            
-            if move == bot_move:
-                db.update_game_stats(user_id, 'rps', 'draw')
-                text = f"✂️ <b>RPS</b>\n\n👤 You: {moves[move]}\n🤖 Bot: {moves[bot_move]}\n\n🤝 <b>IT'S A TIE!</b>"
-            elif (move == 'rock' and bot_move == 'scissors') or (move == 'paper' and bot_move == 'rock') or (move == 'scissors' and bot_move == 'paper'):
-                db.update_user_coins(user_id, GAME_REWARDS['rps'])
-                db.update_user_xp(user_id, XP_REWARDS['win'])
-                db.update_game_stats(user_id, 'rps', 'win')
-                text = f"✂️ <b>RPS</b>\n\n👤 You: {moves[move]}\n🤖 Bot: {moves[bot_move]}\n\n🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['rps']} coins"
-            else:
-                db.update_game_stats(user_id, 'rps', 'loss')
-                text = f"✂️ <b>RPS</b>\n\n👤 You: {moves[move]}\n🤖 Bot: {moves[bot_move]}\n\n❌ <b>YOU LOSE!</b>"
-            
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
-        
-        # Quiz
-        elif data.startswith("quiz_answer_"):
-            parts = data.split("_")
-            session_id = int(parts[2])
-            selected = int(parts[3])
-            
-            session = db.get_quiz_session(session_id)
-            if not session or session['status'] != 'active':
-                bot.answer_callback_query(call.id, "❌ This quiz has expired!", show_alert=True)
-                return
-            
-            if session['expires_at'] < int(time.time()):
-                bot.answer_callback_query(call.id, "❌ This quiz has expired!", show_alert=True)
-                db.update_quiz_session(session_id, 'expired')
-                return
-            
-            correct = session['correct_answer']
-            questions = db.get_all_quiz_questions()
-            q = questions[session['question_id']] if session['question_id'] < len(questions) else None
-            
-            if selected == correct:
-                db.update_user_coins(user_id, GAME_REWARDS['quiz'])
-                db.update_user_xp(user_id, XP_REWARDS['quiz_correct'])
-                db.update_game_stats(user_id, 'quiz', 'win')
-                text = f"❓ <b>QUIZ</b>\n\n✅ <b>CORRECT!</b>\n\n🏆 Winner: @{call.from_user.username or 'User'}\n💰 +{GAME_REWARDS['quiz']} coins\n⭐ +{XP_REWARDS['quiz_correct']} XP"
-                if q:
-                    text += f"\n\nAnswer: {q['options'][correct]}"
-            else:
-                db.update_game_stats(user_id, 'quiz', 'loss')
-                text = f"❓ <b>QUIZ</b>\n\n❌ <b>WRONG!</b>\n\nCorrect answer: {q['options'][correct] if q else 'N/A'}"
-            
-            db.update_quiz_session(session_id, 'completed')
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
-        
-        # RPS Accept
-        elif data.startswith("rps_accept_"):
-            parts = data.split("_")
-            p1 = int(parts[2])
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            p1_name = db.get_user(p1)['username'] or 'Player1'
-            p2_name = db.get_user(p2)['username'] or 'Player2'
-            
-            markup = types.InlineKeyboardMarkup(row_width=3)
-            markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_pvp_move_{p1}_rock"))
-            markup.add(types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_pvp_move_{p1}_paper"))
-            markup.add(types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_pvp_move_{p1}_scissors"))
-            
-            bot.edit_message_text(
-                f"✂️ <b>RPS BATTLE</b>\n\n👤 @{p1_name}\n🔴 ❌ Not Played\n\n👤 @{p2_name}\n🔴 ❌ Not Played\n\n<b>@{p1_name}'s turn</b>",
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup,
-                parse_mode='HTML'
-            )
-        
-        elif data.startswith("rps_decline_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("❌ Challenge declined.", call.message.chat.id, call.message.message_id)
-        
-        # RPS PvP Move
-        elif data.startswith("rps_pvp_move_"):
-            parts = data.split("_")
-            player = int(parts[3])
-            move = parts[4]
-            
-            if player != user_id:
-                bot.answer_callback_query(call.id, "❌ Not your turn!", show_alert=True)
-                return
-            
-            # Find game session
-            session_id = None
-            for sid, game in game_manager.items():
-                if game['chat_id'] == call.message.chat.id and game['game_type'] == 'rps' and game['status'] == 'active':
-                    if player in [game['player1_id'], game['player2_id']]:
-                        session_id = sid
-                        break
-            
-            if not session_id:
-                bot.answer_callback_query(call.id, "❌ Game not found!", show_alert=True)
-                return
-            
-            game = get_game(session_id)
-            p1 = game['player1_id']
-            p2 = game['player2_id']
-            
-            moves = game.get('moves', {})
-            moves[str(player)] = move
-            update_game(session_id, moves=moves)
-            
-            p1_name = db.get_user(p1)['username'] or 'Player1'
-            p2_name = db.get_user(p2)['username'] or 'Player2'
-            
-            # Check if both moved
-            if str(p1) in moves and str(p2) in moves:
-                p1_move = moves[str(p1)]
-                p2_move = moves[str(p2)]
-                move_names = {'rock': '🪨 Rock', 'paper': '📄 Paper', 'scissors': '✂️ Scissors'}
-                
-                if p1_move == p2_move:
-                    winner_text = "🤝 <b>IT'S A TIE!</b>"
-                    winner_id = None
-                elif (p1_move == 'rock' and p2_move == 'scissors') or (p1_move == 'paper' and p2_move == 'rock') or (p1_move == 'scissors' and p2_move == 'paper'):
-                    winner_text = f"🏆 <b>WINNER: @{p1_name}</b>"
-                    winner_id = p1
-                else:
-                    winner_text = f"🏆 <b>WINNER: @{p2_name}</b>"
-                    winner_id = p2
-                
-                if winner_id:
-                    db.update_user_coins(winner_id, GAME_REWARDS['rps'])
-                    db.update_user_xp(winner_id, XP_REWARDS['win'])
-                    db.update_game_stats(winner_id, 'rps', 'win')
-                    loser_id = p2 if winner_id == p1 else p1
-                    db.update_game_stats(loser_id, 'rps', 'loss')
-                    reward_text = f"\n💰 +{GAME_REWARDS['rps']} coins\n⭐ +{XP_REWARDS['win']} XP"
-                else:
-                    db.update_game_stats(p1, 'rps', 'draw')
-                    db.update_game_stats(p2, 'rps', 'draw')
-                    reward_text = ""
-                
-                bot.edit_message_text(
-                    f"✂️ <b>RPS RESULT</b>\n\n👤 @{p1_name}\n{move_names[p1_move]}\n\n👤 @{p2_name}\n{move_names[p2_move]}\n\n{winner_text}{reward_text}",
-                    call.message.chat.id,
-                    call.message.message_id,
-                    parse_mode='HTML'
-                )
-                remove_game(session_id)
-            else:
-                p1_done = str(p1) in moves
-                p2_done = str(p2) in moves
-                
-                p1_status = "🟢 ✅ Played" if p1_done else "🔴 ❌ Not Played"
-                p2_status = "🟢 ✅ Played" if p2_done else "🔴 ❌ Not Played"
-                
-                next_player = p1 if not p1_done else p2
-                next_name = db.get_user(next_player)['username'] or 'Player'
-                
-                markup = types.InlineKeyboardMarkup(row_width=3)
-                if not p1_done:
-                    markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_pvp_move_{p1}_rock"))
-                    markup.add(types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_pvp_move_{p1}_paper"))
-                    markup.add(types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_pvp_move_{p1}_scissors"))
-                else:
-                    markup.add(types.InlineKeyboardButton("🪨 ROCK", callback_data=f"rps_pvp_move_{p2}_rock"))
-                    markup.add(types.InlineKeyboardButton("📄 PAPER", callback_data=f"rps_pvp_move_{p2}_paper"))
-                    markup.add(types.InlineKeyboardButton("✂️ SCISSORS", callback_data=f"rps_pvp_move_{p2}_scissors"))
-                
-                bot.edit_message_text(
-                    f"✂️ <b>RPS BATTLE</b>\n\n👤 @{p1_name}\n{p1_status}\n\n👤 @{p2_name}\n{p2_status}\n\n<b>@{next_name}'s turn</b>",
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=markup,
-                    parse_mode='HTML'
-                )
-        
-        # Blackjack PvP Accept/Decline
-        elif data.startswith("bj_accept_"):
-            parts = data.split("_")
-            p1 = int(parts[2])
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("✅ Blackjack challenge accepted! Game starting...", call.message.chat.id, call.message.message_id)
-            # Simplified - actual game logic would go here
-        
-        elif data.startswith("bj_decline_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("❌ Challenge declined.", call.message.chat.id, call.message.message_id)
-        
-        # Card PvP Accept/Decline
-        elif data.startswith("card_accept_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("✅ Card challenge accepted! Game starting...", call.message.chat.id, call.message.message_id)
-        
-        elif data.startswith("card_decline_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("❌ Challenge declined.", call.message.chat.id, call.message.message_id)
-        
-        # Dice PvP Accept/Decline
-        elif data.startswith("dice_accept_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("✅ Dice challenge accepted! Game starting...", call.message.chat.id, call.message.message_id)
-        
-        elif data.startswith("dice_decline_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("❌ Challenge declined.", call.message.chat.id, call.message.message_id)
-        
-        # Tic Tac Toe PvP Accept/Decline
-        elif data.startswith("ttt_accept_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("✅ Tic Tac Toe challenge accepted! Game starting...", call.message.chat.id, call.message.message_id)
-        
-        elif data.startswith("ttt_decline_"):
-            parts = data.split("_")
-            p2 = int(parts[3])
-            
-            if p2 != user_id:
-                bot.answer_callback_query(call.id, "❌ This challenge isn't for you!", show_alert=True)
-                return
-            
-            bot.edit_message_text("❌ Challenge declined.", call.message.chat.id, call.message.message_id)
-        
-        # Blackjack Bot game
-        elif data.startswith("bj_hit_"):
-            session_id = int(data.split("_")[2])
-            game = get_game(session_id)
-            
-            if not game:
-                bot.answer_callback_query(call.id, "❌ Game expired!", show_alert=True)
-                return
-            
-            if game['player1_id'] != user_id:
-                bot.answer_callback_query(call.id, "❌ Not your game!", show_alert=True)
-                return
-            
-            moves = game['moves']
-            player_cards = moves['player_cards']
-            bot_cards = moves['bot_cards']
-            
-            suits = ['♠', '♥', '♦', '♣']
-            values = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
-            
-            def get_card():
-                return random.choice(values) + random.choice(suits)
-            
-            def card_value(c):
-                v = c[:-1]
-                if v.isdigit():
-                    return int(v)
-                if v in ['J','Q','K']:
-                    return 10
-                return 11
-            
-            def hand_total(hand):
-                total = sum(card_value(c) for c in hand)
-                aces = sum(1 for c in hand if c.startswith('A'))
-                while total > 21 and aces > 0:
-                    total -= 10
-                    aces -= 1
-                return total
-            
-            player_cards.append(get_card())
-            player_total = hand_total(player_cards)
-            
-            if player_total > 21:
-                # Player busts
-                db.update_game_stats(user_id, 'blackjack', 'loss')
-                bot.edit_message_text(
-                    f"🃏 <b>BLACKJACK</b>\n\n👤 Your Hand: {' '.join(player_cards)} = {player_total}\n🤖 Bot Hand: {' '.join(bot_cards)} = {hand_total(bot_cards)}\n\n💥 <b>BUST!</b>\n❌ You lose!",
-                    call.message.chat.id,
-                    call.message.message_id,
-                    parse_mode='HTML'
-                )
-                remove_game(session_id)
-            else:
-                update_game(session_id, moves=moves)
-                
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(types.InlineKeyboardButton("➕ HIT", callback_data=f"bj_hit_{session_id}"))
-                markup.add(types.InlineKeyboardButton("✋ STAND", callback_data=f"bj_stand_{session_id}"))
-                
-                bot.edit_message_text(
-                    f"🃏 <b>BLACKJACK</b>\n\n👤 Your Hand: {' '.join(player_cards)} = {player_total}\n🤖 Bot Hand: {bot_cards[0]} ?\n\nChoose your action:",
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=markup,
-                    parse_mode='HTML'
-                )
-            
-            bot.answer_callback_query(call.id)
-        
-        elif data.startswith("bj_stand_"):
-            session_id = int(data.split("_")[2])
-            game = get_game(session_id)
-            
-            if not game:
-                bot.answer_callback_query(call.id, "❌ Game expired!", show_alert=True)
-                return
-            
-            if game['player1_id'] != user_id:
-                bot.answer_callback_query(call.id, "❌ Not your game!", show_alert=True)
-                return
-            
-            moves = game['moves']
-            player_cards = moves['player_cards']
-            bot_cards = moves['bot_cards']
-            
-            def card_value(c):
-                v = c[:-1]
-                if v.isdigit():
-                    return int(v)
-                if v in ['J','Q','K']:
-                    return 10
-                return 11
-            
-            def hand_total(hand):
-                total = sum(card_value(c) for c in hand)
-                aces = sum(1 for c in hand if c.startswith('A'))
-                while total > 21 and aces > 0:
-                    total -= 10
-                    aces -= 1
-                return total
-            
-            player_total = hand_total(player_cards)
-            bot_total = hand_total(bot_cards)
-            
-            # Bot plays
-            while bot_total < 17:
-                suits = ['♠', '♥', '♦', '♣']
-                values = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
-                bot_cards.append(random.choice(values) + random.choice(suits))
-                bot_total = hand_total(bot_cards)
-            
-            # Determine winner
-            if bot_total > 21 or player_total > bot_total:
-                db.update_user_coins(user_id, GAME_REWARDS['blackjack'])
-                db.update_user_xp(user_id, XP_REWARDS['win'])
-                db.update_game_stats(user_id, 'blackjack', 'win')
-                result = f"🏆 <b>YOU WIN!</b> 🎉\n💰 +{GAME_REWARDS['blackjack']} coins"
-            elif player_total == bot_total:
-                db.update_game_stats(user_id, 'blackjack', 'draw')
-                result = "🤝 <b>IT'S A TIE!</b>"
-            else:
-                db.update_game_stats(user_id, 'blackjack', 'loss')
-                result = "❌ <b>YOU LOSE!</b>"
-            
-            bot.edit_message_text(
-                f"🃏 <b>BLACKJACK</b>\n\n👤 Your Hand: {' '.join(player_cards)} = {player_total}\n🤖 Bot Hand: {' '.join(bot_cards)} = {bot_total}\n\n{result}",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='HTML'
-            )
-            remove_game(session_id)
-            bot.answer_callback_query(call.id)
-        
-        # Profile/Stats view
-        elif data.startswith("view_profile_"):
-            target_id = int(data.split("_")[2])
-            # Re-send profile
-            dummy = call.message
-            dummy.from_user = call.from_user
-            # This is a simplification
-            bot.answer_callback_query(call.id, "Use /profile to view your profile.")
-        
-        elif data.startswith("view_stats_"):
-            target_id = int(data.split("_")[2])
-            bot.answer_callback_query(call.id, "Use /stats to view your statistics.")
-        
-        else:
-            bot.answer_callback_query(call.id, "Feature coming soon!")
-            
-    except ValueError as e:
-        bot.answer_callback_query(call.id, f"❌ {str(e)}", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error in callback: {e}")
-        bot.answer_callback_query(call.id, "❌ An error occurred.", show_alert=True)
+    if data == "games":
+        show_games_menu(call.message)
+    elif data == "profile":
+        show_profile(call.message)
+    elif data == "balance":
+        show_balance(call.message)
+    elif data == "rank":
+        show_rank(call.message)
+    elif data == "leaderboard":
+        show_leaderboard(call.message)
+    elif data == "daily":
+        show_daily(call.message)
+    elif data == "help":
+        show_help(call.message)
+    elif data.startswith("join_"):
+        handle_join_match(call)
+    elif data.startswith("ttt_move_"):
+        handle_ttt_move(call)
+    elif data.startswith("practice_ttt_"):
+        handle_practice_ttt(call)
+    elif data.startswith("practice_rps_"):
+        handle_practice_rps(call)
+    elif data.startswith("cancel_"):
+        handle_cancel_match(call)
 
-# ============== GROUP WELCOME ==============
+def show_games_menu(message):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🎮 Tic Tac Toe", callback_data="game_ttt"),
+        InlineKeyboardButton("✊ RPS", callback_data="game_rps"),
+        InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+    )
+    bot.edit_message_text("🎮 Select a game:", message.chat.id, message.message_id, reply_markup=markup)
+
+def show_profile(message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user:
+        bot.reply_to(message, "❌ Please start the bot first with /start")
+        return
+    
+    response = f"""╔══════════════════════╗
+👤 PROFILE
+╚══════════════════════╝
+
+👤 Name: {user[2]}
+🆔 ID: {user[0]}
+⭐ XP: {user[4]}
+📈 Level: {user[5]}
+🪙 Coins: {user[3]}
+🎮 Games: {user[7]}
+🏆 Wins: {user[8]}
+💔 Losses: {user[9]}
+📊 Win Rate: {calculate_win_rate(user[8], user[7])}
+🥇 Rank: {user[6]}
+
+━━━━━━━━━━━━━━━━━━━━━━"""
+    bot.edit_message_text(response, message.chat.id, message.message_id, 
+                         reply_markup=InlineKeyboardMarkup().add(
+                             InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+                         ))
+
+def show_balance(message):
+    user_id = message.from_user.id
+    balance = get_user_balance(user_id)
+    
+    response = f"""╔══════════════════════╗
+🪙 BALANCE
+╚══════════════════════╝
+
+💰 Your Balance: {balance} Coins
+
+━━━━━━━━━━━━━━━━━━━━━━
+🎮 Play games to earn more!
+━━━━━━━━━━━━━━━━━━━━━━"""
+    bot.edit_message_text(response, message.chat.id, message.message_id,
+                         reply_markup=InlineKeyboardMarkup().add(
+                             InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+                         ))
+
+def show_rank(message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    
+    if not user:
+        bot.reply_to(message, "❌ Please start the bot first with /start")
+        return
+    
+    level, next_level_xp = calculate_level(user[4])
+    xp_to_next = next_level_xp - user[4] if level < 100 else 0
+    
+    response = f"""╔══════════════════════╗
+🏆 YOUR RANK
+╚══════════════════════╝
+
+👤 {user[2]}
+
+⭐ Level : {user[5]}
+📈 XP : {user[4]} / {next_level_xp}
+
+🥇 Rank : {user[6]}
+
+🌎 Global : #N/A
+👥 This Group : #N/A
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 {xp_to_next} XP to Level {user[5] + 1}
+━━━━━━━━━━━━━━━━━━━━━━"""
+    bot.edit_message_text(response, message.chat.id, message.message_id,
+                         reply_markup=InlineKeyboardMarkup().add(
+                             InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+                         ))
+
+def show_leaderboard(message):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🌎 GLOBAL", callback_data="lb_global"),
+        InlineKeyboardButton("👥 GROUP", callback_data="lb_group"),
+        InlineKeyboardButton("⭐ XP", callback_data="lb_xp"),
+        InlineKeyboardButton("🪙 COINS", callback_data="lb_coins"),
+        InlineKeyboardButton("🏆 WINS", callback_data="lb_wins"),
+        InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+    )
+    bot.edit_message_text("📊 Select Leaderboard Type:", message.chat.id, message.message_id, reply_markup=markup)
+
+def show_daily(message):
+    user_id = message.from_user.id
+    
+    if claim_daily(user_id):
+        balance = get_user_balance(user_id)
+        response = f"""╔══════════════════════╗
+🎁 DAILY REWARD
+╚══════════════════════╝
+
+🎉 Daily Reward Claimed!
+
+🪙 +250 Coins
+💰 Balance : {balance}
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 Come Back Tomorrow!
+━━━━━━━━━━━━━━━━━━━━━━"""
+    else:
+        response = f"""╔══════════════════════╗
+🎁 DAILY REWARD
+╚══════════════════════╝
+
+❌ Already Claimed Today!
+
+⏰ Next Claim: Tomorrow 12:00 AM IST
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 Come Back Tomorrow!
+━━━━━━━━━━━━━━━━━━━━━━"""
+    
+    bot.edit_message_text(response, message.chat.id, message.message_id,
+                         reply_markup=InlineKeyboardMarkup().add(
+                             InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+                         ))
+
+def show_help(message):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🎮 GAMES", callback_data="help_games"),
+        InlineKeyboardButton("🪙 ECONOMY", callback_data="help_economy"),
+        InlineKeyboardButton("👤 PROFILE", callback_data="help_profile"),
+        InlineKeyboardButton("🎁 REWARDS", callback_data="help_rewards"),
+        InlineKeyboardButton("📖 GUIDE", callback_data="help_guide"),
+        InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")
+    )
+    bot.edit_message_text("📖 Help Menu:", message.chat.id, message.message_id, reply_markup=markup)
+
+def calculate_win_rate(wins, games_played):
+    if games_played == 0:
+        return "0%"
+    return f"{(wins / games_played * 100):.1f}%"
+
+def handle_join_match(call):
+    match_id = call.data.split("_")[1]
+    user_id = call.from_user.id
+    
+    if match_id not in active_matches:
+        bot.answer_callback_query(call.id, "❌ Game expired!")
+        return
+    
+    if join_match(match_id, user_id):
+        match = active_matches[match_id]
+        # Start the game
+        game = match['game_instance']
+        markup = create_ttt_board(game, match_id)
+        
+        bot.edit_message_text(
+            f"🎮 Game Started!\n\n" + game.get_board_display(),
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id, "✅ Joined successfully!")
+    else:
+        bot.answer_callback_query(call.id, "❌ Cannot join game!")
+
+def handle_ttt_move(call):
+    data = call.data.split("_")
+    match_id = data[2]
+    position = int(data[3])
+    user_id = call.from_user.id
+    
+    result = handle_move(match_id, user_id, position)
+    if result is None:
+        bot.answer_callback_query(call.id, "❌ Invalid move!")
+        return
+    
+    match = active_matches[match_id]
+    game = match['game_instance']
+    
+    if result == 'continue':
+        markup = create_ttt_board(game, match_id)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.answer_callback_query(call.id, "✅ Move made!")
+    elif result == 'draw':
+        # Return bets
+        update_user_balance(match['host_id'], match['bet_amount'])
+        update_user_balance(match['player2_id'], match['bet_amount'])
+        add_transaction(match['host_id'], 'refund', match['bet_amount'], "Draw refund")
+        add_transaction(match['player2_id'], 'refund', match['bet_amount'], "Draw refund")
+        
+        # Update match status
+        match['status'] = 'completed'
+        
+        bot.edit_message_text(
+            f"🤝 Game Draw!\n\n" + game.get_board_display() + "\n\nBoth players get their bets back!",
+            call.message.chat.id,
+            call.message.message_id
+        )
+        bot.answer_callback_query(call.id, "🤝 Draw!")
+    elif result in ['X', 'O']:
+        winner_id = match['host_id'] if result == 'X' else match['player2_id']
+        settle_match(match_id, winner_id)
+        
+        winner_name = call.from_user.first_name if winner_id == user_id else "Player"
+        bot.edit_message_text(
+            f"🏆 Game Over!\n\n{game.get_board_display()}\n\n🎉 Winner: {winner_name}!",
+            call.message.chat.id,
+            call.message.message_id
+        )
+        bot.answer_callback_query(call.id, "🏆 Game Over!")
+
+def handle_practice_ttt(call):
+    position = int(call.data.split("_")[2])
+    # Simple practice mode - bot responds randomly
+    # For now, just show message
+    bot.answer_callback_query(call.id, "🎮 Practice mode - AI coming soon!")
+
+def handle_practice_rps(call):
+    choice = call.data.split("_")[2]
+    bot_choice = random.choice(['rock', 'paper', 'scissors'])
+    
+    emojis = {'rock': '🪨', 'paper': '📄', 'scissors': '✂️'}
+    beats = {'rock': 'scissors', 'paper': 'rock', 'scissors': 'paper'}
+    
+    if choice == bot_choice:
+        result = "🤝 Draw!"
+    elif beats[choice] == bot_choice:
+        result = "🎉 You Win!"
+    else:
+        result = "😔 You Lose!"
+    
+    response = f"""✊ RPS Practice
+
+You: {emojis[choice]}
+Bot: {emojis[bot_choice]}
+
+{result}
+
+🔁 Play again with /rps in DM"""
+    
+    bot.edit_message_text(response, call.message.chat.id, call.message.message_id,
+                         reply_markup=InlineKeyboardMarkup().add(
+                             InlineKeyboardButton("🔄 Play Again", callback_data="practice_rps_again")
+                         ))
+    bot.answer_callback_query(call.id, "✅ Move made!")
+
+def handle_cancel_match(call):
+    match_id = call.data.split("_")[1]
+    if match_id in active_matches:
+        match = active_matches[match_id]
+        if match['status'] == 'waiting':
+            del active_matches[match_id]
+            # Delete from database
+            conn = sqlite3.connect('zynox_bot.db')
+            c = conn.cursor()
+            c.execute("DELETE FROM matches WHERE match_id = ?", (match_id,))
+            conn.commit()
+            conn.close()
+            bot.edit_message_text("❌ Game cancelled!", call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, "✅ Game cancelled!")
+        else:
+            bot.answer_callback_query(call.id, "❌ Game already started!")
+    else:
+        bot.answer_callback_query(call.id, "❌ Game not found!")
+
+# Owner commands
+@bot.message_handler(commands=['wallet'])
+def handle_wallet(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command!")
+        return
+    
+    balance = get_bot_wallet()
+    response = f"""╔══════════════════════╗
+🏦 BOT WALLET
+╚══════════════════════╝
+
+💰 Balance: {balance} Coins
+
+━━━━━━━━━━━━━━━━━━━━━━
+📊 Total Fees Collected
+━━━━━━━━━━━━━━━━━━━━━━"""
+    bot.reply_to(message, response)
+
+@bot.message_handler(commands=['give'])
+def handle_give(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command!")
+        return
+    
+    args = message.text.split()
+    if len(args) != 3:
+        bot.reply_to(message, "❌ Usage: /give @username 5000 or /give user_id 5000")
+        return
+    
+    target = args[1]
+    amount = int(args[2])
+    
+    if amount <= 0:
+        bot.reply_to(message, "❌ Amount must be positive!")
+        return
+    
+    # Get user_id
+    if target.startswith('@'):
+        # Get user by username
+        conn = sqlite3.connect('zynox_bot.db')
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE username = ?", (target[1:],))
+        result = c.fetchone()
+        conn.close()
+        if not result:
+            bot.reply_to(message, "❌ User not found!")
+            return
+        user_id = result[0]
+    else:
+        user_id = int(target)
+    
+    update_user_balance(user_id, amount)
+    add_transaction(user_id, 'give', amount, f"Admin give {amount} coins")
+    update_bot_wallet(-amount)
+    
+    bot.reply_to(message, f"✅ Successfully gave {amount} coins to user {target}!")
+
+@bot.message_handler(commands=['take'])
+def handle_take(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "❌ Owner only command!")
+        return
+    
+    args = message.text.split()
+    if len(args) != 3:
+        bot.reply_to(message, "❌ Usage: /take @username 500 or /take user_id 500")
+        return
+    
+    target = args[1]
+    amount = int(args[2])
+    
+    if amount <= 0:
+        bot.reply_to(message, "❌ Amount must be positive!")
+        return
+    
+    # Get user_id
+    if target.startswith('@'):
+        conn = sqlite3.connect('zynox_bot.db')
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE username = ?", (target[1:],))
+        result = c.fetchone()
+        conn.close()
+        if not result:
+            bot.reply_to(message, "❌ User not found!")
+            return
+        user_id = result[0]
+    else:
+        user_id = int(target)
+    
+    # Check if user has enough balance
+    balance = get_user_balance(user_id)
+    if balance < amount:
+        bot.reply_to(message, f"❌ User only has {balance} coins!")
+        return
+    
+    update_user_balance(user_id, -amount)
+    add_transaction(user_id, 'take', -amount, f"Admin take {amount} coins")
+    update_bot_wallet(amount)
+    
+    bot.reply_to(message, f"✅ Successfully took {amount} coins from user {target}!")
+
+# Group welcome message
 @bot.message_handler(content_types=['new_chat_members'])
-def handle_new_member(message):
+def welcome_new_member(message):
     for member in message.new_chat_members:
-        if member.is_bot:
+        if member.id == bot.get_me().id:
+            # Bot added to group
+            conn = sqlite3.connect('zynox_bot.db')
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO groups (group_id, group_name, added_date) VALUES (?, ?, ?)",
+                     (message.chat.id, message.chat.title, datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
             continue
         
-        text = f"""👑 <b>WELCOME TO ZYNOX GAMING</b> 👑
+        # Welcome new member
+        welcome = f"""╔═ 🎉✨ WELCOME ✨🎉 ═╗
 
-👋 Welcome, @{member.username or member.first_name}!
+👋 Welcome, {member.first_name} 💎
 
-🎮 Play exciting games
-💰 Earn coins
-🏆 Increase your rank
-⭐ Level up through activity
-⚔️ Rob other players
-🛡️ Protect your coins
+🆔 User ID : "{member.id}"
+👤 Username : @{member.username or 'No username'}
 
-🎁 Start the bot in DM and claim rewards!"""
+🎮 Welcome To 🎮
+✅ 𝐙𝐘𝐍𝐎𝐗 𝐆𝐀𝐌𝐈𝐍𝐆 ✅
+
+╚══ 🚀💓 ENJOY 💓🚀 ══╝"""
         
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🚀 START BOT", url=f"https://t.me/{bot.get_me().username}?start=welcome"))
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🎮 START BOT", url=f"https://t.me/{BOT_USERNAME}?start"))
         
-        try:
-            bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='HTML')
-        except:
-            pass
-        
-        try:
-            chat = bot.get_chat(message.chat.id)
-            db.update_group_info(message.chat.id, chat.title, chat.get_member_count() if hasattr(chat, 'get_member_count') else 0)
-        except:
-            pass
-        
-        break
+        bot.send_message(message.chat.id, welcome, reply_markup=markup)
 
-# ============== OWNER COMMANDS ==============
-@bot.message_handler(commands=['broadcast'])
-def handle_broadcast(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "⚠️ Reply to a message to broadcast.")
-        return
-    
-    msg = message.reply_to_message.text or "Broadcast"
-    users = db.get_all_users()
-    sent = 0
-    
-    for u in users:
-        try:
-            bot.send_message(u['user_id'], f"📢 <b>BROADCAST</b>\n\n{msg}", parse_mode='HTML')
-            sent += 1
-        except:
-            pass
-    
-    bot.reply_to(message, f"✅ Broadcast sent to {sent} users.")
-
-@bot.message_handler(commands=['gcast'])
-def handle_gcast(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    if not message.reply_to_message:
-        bot.reply_to(message, "⚠️ Reply to a message to broadcast.")
-        return
-    
-    msg = message.reply_to_message.text or "Broadcast"
-    groups = db.get_all_groups()
-    sent = 0
-    
-    for g in groups:
-        try:
-            bot.send_message(g['group_id'], f"📢 <b>BROADCAST</b>\n\n{msg}", parse_mode='HTML')
-            sent += 1
-        except:
-            pass
-    
-    bot.reply_to(message, f"✅ Broadcast sent to {sent} groups.")
-
-@bot.message_handler(commands=['addcoins'])
-def handle_addcoins(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 3:
-        bot.reply_to(message, "⚠️ Usage: /addcoins @username amount")
-        return
-    
-    username = parts[1].replace('@', '')
-    amount = int(parts[2])
-    
-    users = db.get_all_users()
-    target = None
-    for u in users:
-        if u['username'] == username:
-            target = u
-            break
-    
-    if not target:
-        bot.reply_to(message, f"❌ User @{username} not found.")
-        return
-    
-    db.update_user_coins(target['user_id'], amount)
-    user = db.get_user(target['user_id'])
-    bot.reply_to(message, f"✅ Added {format_number(amount)} coins to @{username}\n\n📊 New Balance: {format_number(user['coins'])}")
-
-@bot.message_handler(commands=['removecoins'])
-def handle_removecoins(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 3:
-        bot.reply_to(message, "⚠️ Usage: /removecoins @username amount")
-        return
-    
-    username = parts[1].replace('@', '')
-    amount = int(parts[2])
-    
-    users = db.get_all_users()
-    target = None
-    for u in users:
-        if u['username'] == username:
-            target = u
-            break
-    
-    if not target:
-        bot.reply_to(message, f"❌ User @{username} not found.")
-        return
-    
-    db.update_user_coins(target['user_id'], -amount)
-    user = db.get_user(target['user_id'])
-    bot.reply_to(message, f"✅ Removed {format_number(amount)} coins from @{username}\n\n📊 New Balance: {format_number(user['coins'])}")
-
-@bot.message_handler(commands=['banuser'])
-def handle_banuser(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "⚠️ Usage: /banuser @username")
-        return
-    
-    username = parts[1].replace('@', '')
-    reason = ' '.join(parts[2:]) if len(parts) > 2 else 'No reason provided'
-    
-    users = db.get_all_users()
-    target = None
-    for u in users:
-        if u['username'] == username:
-            target = u
-            break
-    
-    if not target:
-        bot.reply_to(message, f"❌ User @{username} not found.")
-        return
-    
-    db.ban_user(target['user_id'], reason)
-    bot.reply_to(message, f"✅ User @{username} banned.\nReason: {reason}")
-    
-    try:
-        bot.send_message(target['user_id'], f"🚫 <b>You have been banned</b>\n\nReason: {reason}\nContact support for more information.", parse_mode='HTML')
-    except:
-        pass
-
-@bot.message_handler(commands=['unbanuser'])
-def handle_unbanuser(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "⚠️ Usage: /unbanuser @username")
-        return
-    
-    username = parts[1].replace('@', '')
-    
-    users = db.get_all_users()
-    target = None
-    for u in users:
-        if u['username'] == username:
-            target = u
-            break
-    
-    if not target:
-        bot.reply_to(message, f"❌ User @{username} not found.")
-        return
-    
-    db.unban_user(target['user_id'])
-    bot.reply_to(message, f"✅ User @{username} unbanned.")
-    
-    try:
-        bot.send_message(target['user_id'], "✅ <b>You have been unbanned</b>\n\nYou can now use the bot again.", parse_mode='HTML')
-    except:
-        pass
-
-@bot.message_handler(commands=['users'])
-def handle_users(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    users = db.get_all_users()
-    total_coins = sum(u['coins'] for u in users)
-    
-    bot.reply_to(message, f"📊 <b>User Statistics</b>\n\n👥 Total Users: {len(users)}\n💰 Total Coins: {format_number(total_coins)}\n🏅 Avg Coins: {format_number(total_coins // len(users)) if users else 0}", parse_mode='HTML')
-
-@bot.message_handler(commands=['groups'])
-def handle_groups(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    groups = db.get_all_groups()
-    text = "📊 <b>Group Statistics</b>\n\n"
-    
-    for g in groups[:20]:
-        text += f"👥 {g['group_name'] or 'Unknown'}: {g['member_count']} members\n"
-    
-    if len(groups) > 20:
-        text += f"\n... and {len(groups) - 20} more groups"
-    
-    bot.reply_to(message, text, parse_mode='HTML')
-
-@bot.message_handler(commands=['stats_owner'])
-def handle_stats_owner(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    users = db.get_all_users()
-    groups = db.get_all_groups()
-    total_coins = sum(u['coins'] for u in users)
-    
-    bot.reply_to(message, f"📊 <b>Bot Statistics</b>\n\n👥 Users: {len(users)}\n👥 Groups: {len(groups)}\n💰 Total Coins: {format_number(total_coins)}\n🏆 Top: {format_number(max([u['coins'] for u in users]) if users else 0)}", parse_mode='HTML')
-
-@bot.message_handler(commands=['restart'])
-def handle_restart(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    bot.reply_to(message, "🔄 Bot restarting... (Manual restart required)")
-
-@bot.message_handler(commands=['backup'])
-def handle_backup(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "❌ You don't have permission!")
-        return
-    
-    bot.reply_to(message, "✅ Backup command received. (Manual backup required)")
-
-# ============== TEXT HANDLER ==============
-@bot.message_handler(func=lambda m: True)
-def handle_text(message):
-    # This handles any other text messages
-    pass
-
-# ============== RUN ==============
+# Start the bot
 if __name__ == "__main__":
-    logger.info("🚀 Starting Zynox Gaming Bot...")
-    logger.info(f"👤 Owner ID: {OWNER_ID}")
+    init_db()
+    print("🤖 ZYNOX GAMING BOT started!")
+    print(f"👑 Owner: {OWNER_USERNAME} (ID: {OWNER_ID})")
+    print(f"📢 Support Channel: {SUPPORT_CHANNEL}")
+    print(f"👥 Support Group: {SUPPORT_GROUP}")
+    print("━━━━━━━━━━━━━━━━━━━━━━")
     
-    try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
-    except Exception as e:
-        logger.error(f"Bot crashed: {e}")
-        time.sleep(5)
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0)
+        except Exception as e:
+            print(f"Error: {e}")
+            time.sleep(5)
