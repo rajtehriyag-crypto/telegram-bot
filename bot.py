@@ -2,6 +2,7 @@ import sqlite3
 import time
 import random
 import threading
+import re
 from datetime import datetime, timezone, timedelta
 
 import telebot
@@ -52,7 +53,9 @@ def init_db():
         dice_date TEXT,
         streak INTEGER DEFAULT 0,
         started_bot INTEGER DEFAULT 0,
-        created_at TEXT
+        created_at TEXT,
+        is_vip INTEGER DEFAULT 0,
+        vip_expiry TEXT
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS groups(
         group_id INTEGER PRIMARY KEY,
@@ -88,6 +91,16 @@ def init_db():
         bet INTEGER,
         player2_id INTEGER,
         status TEXT,
+        created_at TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS vip_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        username TEXT,
+        first_name TEXT,
+        plan TEXT,
+        payment_proof TEXT,
+        status TEXT DEFAULT 'pending',
         created_at TEXT
     )""")
     conn.commit()
@@ -229,6 +242,75 @@ def add_group_stat(group_id, user_id, xp=0, coins=0, wins=0):
     conn.close()
 
 # ============================================================
+# VIP FUNCTIONS
+# ============================================================
+VIP_BENEFITS = {
+    "weekly": {"price": 2000, "duration": 7, "daily_bonus": 100, "dice_bonus": 2},
+    "monthly": {"price": 7000, "duration": 30, "daily_bonus": 300, "dice_bonus": 4},
+    "yearly": {"price": 75000, "duration": 365, "daily_bonus": 1000, "dice_bonus": 6}
+}
+
+def check_vip(user_id):
+    """Check if user has active VIP"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT is_vip, vip_expiry FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return False
+    is_vip, expiry = row
+    if is_vip and expiry:
+        expiry_date = datetime.fromisoformat(expiry)
+        if expiry_date > datetime.now(IST):
+            return True
+        # Expired - auto reset
+        conn = get_conn()
+        conn.execute("UPDATE users SET is_vip=0, vip_expiry=NULL WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+        return False
+    return False
+
+def get_vip_benefits(user_id):
+    """Get VIP benefits for user"""
+    if not check_vip(user_id):
+        return None
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT vip_expiry FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    days_left = (datetime.fromisoformat(row[0]) - datetime.now(IST)).days
+    return {
+        "daily_bonus": 300,  # Default monthly benefits
+        "dice_extra_rolls": 4,
+        "days_left": days_left
+    }
+
+def activate_vip(user_id, plan):
+    """Activate VIP for user"""
+    if plan not in VIP_BENEFITS:
+        return False
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT vip_expiry FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    current_expiry = datetime.now(IST)
+    if row and row[0]:
+        current_expiry = datetime.fromisoformat(row[0])
+        if current_expiry < datetime.now(IST):
+            current_expiry = datetime.now(IST)
+    new_expiry = current_expiry + timedelta(days=VIP_BENEFITS[plan]["duration"])
+    c.execute("UPDATE users SET is_vip=1, vip_expiry=? WHERE user_id=?", 
+              (new_expiry.isoformat(), user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+# ============================================================
 # MEMBERSHIP CHECK
 # ============================================================
 def is_member(user_id, chat_id):
@@ -252,24 +334,15 @@ def membership_prompt(m):
     kb.add(types.InlineKeyboardButton("👥 Support Group", url=SUPPORT_GROUP))
     kb.add(types.InlineKeyboardButton("✅ I Joined", callback_data="check_join"))
     bot.reply_to(m, box("⚠️ VERIFICATION REQUIRED",
-        "🚫 Join Support Channel + Group
-to claim rewards!"), reply_markup=kb)
+        "🚫 Join Support Channel + Group\nto claim rewards!"), reply_markup=kb)
 
 # ============================================================
 # MESSAGE STYLE HELPER
 # ============================================================
 def box(title, body, footer=None):
-    txt = f"╔══════════════════════╗
-{title}
-╚══════════════════════╝
-
-{body}"
+    txt = f"╔══════════════════════╗\n{title}\n╚══════════════════════╝\n\n{body}"
     if footer:
-        txt += f"
-
-━━━━━━━━━━━━━━━━━━━━━━
-{footer}
-━━━━━━━━━━━━━━━━━━━━━━"
+        txt += f"\n\n━━━━━━━━━━━━━━━━━━━━━━\n{footer}\n━━━━━━━━━━━━━━━━━━━━━━"
     return txt
 
 # ============================================================
@@ -289,14 +362,227 @@ def cmd_start(m):
             types.InlineKeyboardButton("🏆 Rank", callback_data="menu_rank"))
     kb.add(types.InlineKeyboardButton("📊 Leaderboard", callback_data="menu_leaderboard"),
             types.InlineKeyboardButton("🎁 Daily", callback_data="menu_daily"))
-    kb.add(types.InlineKeyboardButton("❓ Help", callback_data="menu_help"))
+    kb.add(types.InlineKeyboardButton("👑 VIP", callback_data="menu_vip"),
+            types.InlineKeyboardButton("❓ Help", callback_data="menu_help"))
     text = box("✅ 𝐙𝐘𝐍𝐎𝐗 𝐆𝐀𝐌𝐈𝐍𝐆 ✅",
-        f"👋 Welcome, {u.first_name} 💎
-
-🎮 Games • 🪙 Coins • ⭐ XP
-📈 Levels • 🏆 Ranks",
+        f"👋 Welcome, {u.first_name} 💎\n\n🎮 Games • 🪙 Coins • ⭐ XP\n📈 Levels • 🏆 Ranks\n👑 VIP Benefits",
         "🚀 Choose an option below")
     bot.send_message(m.chat.id, text, reply_markup=kb)
+
+# ============================================================
+# VIP COMMANDS
+# ============================================================
+@bot.message_handler(commands=["vip"])
+def cmd_vip(m):
+    u = m.from_user
+    create_user_if_missing(u.id, u.username, u.first_name)
+    
+    is_vip = check_vip(u.id)
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    
+    if is_vip:
+        benefits = get_vip_benefits(u.id)
+        text = box("👑 VIP STATUS",
+            f"✅ You are a VIP Member!\n\n"
+            f"📅 Days Left: {benefits['days_left']}\n"
+            f"🎁 Daily Bonus: +{benefits['daily_bonus']} Coins\n"
+            f"🎲 Extra Dice Rolls: +{benefits['dice_extra_rolls']} per day\n\n"
+            f"💎 VIP Perks:\n"
+            f"• 2x daily rewards\n"
+            f"• Exclusive games\n"
+            f"• Priority support\n"
+            f"• Special badges")
+        kb.add(types.InlineKeyboardButton("🔄 Renew VIP", callback_data="vip_renew"))
+        kb.add(types.InlineKeyboardButton("📋 Benefits", callback_data="vip_benefits"))
+    else:
+        text = box("👑 VIP MEMBERSHIP",
+            "🚀 Unlock Premium Features!\n\n"
+            "💎 VIP Benefits:\n"
+            "• 2x Daily Rewards\n"
+            "• Extra Dice Rolls\n"
+            "• Exclusive Games\n"
+            "• Priority Support\n"
+            "• Special Rank Badge\n\n"
+            "💰 Plans:\n"
+            "Weekly: 2,000 Coins\n"
+            "Monthly: 7,000 Coins\n"
+            "Yearly: 75,000 Coins")
+        kb.add(types.InlineKeyboardButton("💰 Buy VIP", callback_data="vip_buy"))
+        kb.add(types.InlineKeyboardButton("📋 Benefits", callback_data="vip_benefits"))
+    
+    bot.reply_to(m, text, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("vip_"))
+def cb_vip(call):
+    bot.answer_callback_query(call.id)
+    u = call.from_user
+    data = call.data
+    
+    if data == "vip_buy":
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(types.InlineKeyboardButton("📅 Weekly (2,000)", callback_data="vip_pay_weekly"))
+        kb.add(types.InlineKeyboardButton("📆 Monthly (7,000)", callback_data="vip_pay_monthly"))
+        kb.add(types.InlineKeyboardButton("📅 Yearly (75,000)", callback_data="vip_pay_yearly"))
+        kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="vip_back"))
+        bot.edit_message_text(box("💰 VIP PURCHASE", "Select your plan:"),
+                             call.message.chat.id, call.message.message_id, reply_markup=kb)
+    
+    elif data.startswith("vip_pay_"):
+        plan = data.split("_")[2]
+        price = VIP_BENEFITS[plan]["price"]
+        user_row = get_user(u.id)
+        if user_row[3] < price:
+            bot.edit_message_text(box("❌ INSUFFICIENT BALANCE", 
+                f"You need {price} Coins for {plan} VIP.\nYour balance: {user_row[3]} Coins"),
+                call.message.chat.id, call.message.message_id)
+            return
+        
+        # Deduct coins and activate VIP
+        if add_coins(u.id, -price, f"vip_{plan}"):
+            activate_vip(u.id, plan)
+            wallet_add(price)  # Add to bot wallet
+            
+            text = box("✅ VIP ACTIVATED",
+                f"🎉 Congratulations! You are now a VIP Member!\n\n"
+                f"📅 Plan: {plan.title()}\n"
+                f"💎 Benefits activated!\n\n"
+                f"Use /vip to view your status.")
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("👑 VIP Panel", callback_data="vip_back"))
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
+        else:
+            bot.edit_message_text("❌ Failed to process payment.", 
+                                 call.message.chat.id, call.message.message_id)
+    
+    elif data == "vip_benefits":
+        text = box("💎 VIP BENEFITS",
+            "✨ VIP Perks:\n\n"
+            "🎁 Daily Bonus: 2x coins\n"
+            "🎲 Extra Dice Rolls: +4 per day\n"
+            "🎮 Exclusive Games Access\n"
+            "⭐ Special VIP Badge\n"
+            "🛡️ Priority Support\n"
+            "🏆 Higher XP Gain\n"
+            "💰 Special Discounts\n\n"
+            "💎 Become VIP today!")
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="vip_back"))
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
+    
+    elif data == "vip_renew":
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(types.InlineKeyboardButton("📅 Weekly (2,000)", callback_data="vip_pay_weekly"))
+        kb.add(types.InlineKeyboardButton("📆 Monthly (7,000)", callback_data="vip_pay_monthly"))
+        kb.add(types.InlineKeyboardButton("📅 Yearly (75,000)", callback_data="vip_pay_yearly"))
+        kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="vip_back"))
+        bot.edit_message_text(box("🔄 RENEW VIP", "Extend your VIP membership:"),
+                             call.message.chat.id, call.message.message_id, reply_markup=kb)
+    
+    elif data == "vip_back":
+        cmd_vip(call.message)
+
+# ============================================================
+# MODIFIED DAILY WITH VIP
+# ============================================================
+DAILY_REWARD = 250
+VIP_DAILY_BONUS = 500  # 2x for VIP
+
+@bot.message_handler(commands=["daily"])
+def cmd_daily(m):
+    if m.chat.type != "private":
+        return
+    u = m.from_user
+    create_user_if_missing(u.id, u.username, u.first_name)
+    row = get_user(u.id)
+    if not row[15]:  # started_bot
+        mark_started(u.id)
+    if not check_support_membership(u.id):
+        membership_prompt(m)
+        return
+    today = today_ist()
+    last_claim = row[11]
+    if last_claim == today:
+        bot.reply_to(m, box("⚠️ ALREADY CLAIMED", "🕛 Come back after 12:00 AM IST reset!"))
+        return
+    
+    # VIP bonus
+    is_vip = check_vip(u.id)
+    reward = DAILY_REWARD * 2 if is_vip else DAILY_REWARD
+    vip_text = "💎 VIP Bonus Active! (2x)" if is_vip else ""
+    
+    conn = get_conn()
+    conn.execute("UPDATE users SET daily_claim_date=? WHERE user_id=?", (today, u.id))
+    conn.commit()
+    conn.close()
+    add_coins(u.id, reward, "daily_reward")
+    bal = get_user(u.id)[3]
+    
+    text = box("🎁 DAILY REWARD",
+        f"🎉 Daily Reward Claimed!\n\n"
+        f"🪙 +{reward} Coins\n"
+        f"💰 Balance : {bal}\n"
+        f"{vip_text}\n\n"
+        f"🔥 Come Back Tomorrow!")
+    bot.reply_to(m, text)
+
+# ============================================================
+# MODIFIED DICE WITH VIP
+# ============================================================
+DICE_MAX = 6
+DICE_REWARDS = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50, 6: 100}
+VIP_DICE_EXTRA = 4  # VIP gets 4 extra rolls
+
+@bot.message_handler(commands=["dice"])
+def cmd_dice(m):
+    u = m.from_user
+    create_user_if_missing(u.id, u.username, u.first_name)
+    today = today_ist()
+    row = get_user(u.id)
+    dice_date, rolls_today = row[13], row[12]
+    
+    if dice_date != today:
+        rolls_today = 0
+        conn = get_conn()
+        conn.execute("UPDATE users SET dice_date=?, dice_rolls_today=0 WHERE user_id=?", (today, u.id))
+        conn.commit()
+        conn.close()
+    
+    # VIP extra rolls
+    is_vip = check_vip(u.id)
+    max_rolls = DICE_MAX + (VIP_DICE_EXTRA if is_vip else 0)
+    vip_text = f"💎 VIP: {max_rolls} rolls/day" if is_vip else ""
+    
+    if rolls_today >= max_rolls:
+        bot.reply_to(m, box("⚠️ NO ROLLS LEFT", 
+            f"🕛 Rolls reset at 12:00 AM IST!\n{vip_text}"))
+        return
+    
+    result = random.randint(1, 6)
+    reward = DICE_REWARDS[result]
+    # VIP bonus on dice
+    if is_vip and result == 6:
+        reward = 200  # Double reward for VIP on roll 6
+    rolls_today += 1
+    conn = get_conn()
+    conn.execute("UPDATE users SET dice_rolls_today=? WHERE user_id=?", (rolls_today, u.id))
+    conn.commit()
+    conn.close()
+    add_coins(u.id, reward, "dice_roll")
+    if m.chat.type in ("group", "supergroup"):
+        add_group_stat(m.chat.id, u.id, coins=reward)
+    bal = get_user(u.id)[3]
+    remaining = max_rolls - rolls_today
+    
+    if result == 6:
+        text = box("⚡ STRIKE ⚡",
+            f"🎲 Roll Result : 6️⃣\n\n💥 STRIKE!\n\n🪙 Reward : +{reward} Coins\n💰 Balance : {bal}\n{vip_text}",
+            f"🎯 Rolls Left : {remaining}/{max_rolls}")
+    else:
+        text = box("🎲 DICE ROLL",
+            f"🎲 Roll Result : {result}️⃣\n\n🪙 Reward : +{reward} Coins\n💰 Balance : {bal}\n{vip_text}",
+            f"🎯 Rolls Left : {remaining}/{max_rolls}")
+    bot.reply_to(m, text)
 
 # ============================================================
 # GROUP WELCOME
@@ -313,141 +599,42 @@ def welcome_new_member(m):
             continue
         create_user_if_missing(member.id, member.username, member.first_name)
         uname = f"@{member.username}" if member.username else "N/A"
-        text = (f"╔═ 🎉✨ WELCOME ✨🎉 ═╗
-
-"
-                f"👋 Welcome, {member.first_name} 💎
-
-"
-                f"🆔 User ID : {member.id}
-"
-                f"👤 Username : {uname}
-
-"
-                f"🎮 Welcome To 🎮
-"
-                f"✅ 𝐙𝐘𝐍𝐎𝐗 𝐆𝐀𝐌𝐈𝐍𝐆 ✅
-
-"
+        text = (f"╔═ 🎉✨ WELCOME ✨🎉 ═╗\n\n"
+                f"👋 Welcome, {member.first_name} 💎\n\n"
+                f"🆔 User ID : {member.id}\n"
+                f"👤 Username : {uname}\n\n"
+                f"🎮 Welcome To 🎮\n"
+                f"✅ 𝐙𝐘𝐍𝐎𝐗 𝐆𝐀𝐌𝐈𝐍𝐆 ✅\n\n"
                 f"╚══ 🚀💓 ENJOY 💓🚀 ══╝")
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("🎮 START BOT", url=f"https://t.me/{BOT_USERNAME}?start=welcome"))
         bot.send_message(m.chat.id, text, reply_markup=kb)
 
 # ============================================================
-# /daily (DM ONLY)
-# ============================================================
-DAILY_REWARD = 250
-
-@bot.message_handler(commands=["daily"])
-def cmd_daily(m):
-    if m.chat.type != "private":
-        return
-    u = m.from_user
-    create_user_if_missing(u.id, u.username, u.first_name)
-    row = get_user(u.id)
-    if not row[15]:  # started_bot
-        mark_started(u.id)
-    if not check_support_membership(u.id):
-        membership_prompt(m)
-        return
-    today = today_ist()
-    row = get_user(u.id)
-    last_claim = row[11]
-    if last_claim == today:
-        bot.reply_to(m, box("⚠️ ALREADY CLAIMED", "🕛 Come back after 12:00 AM IST reset!"))
-        return
-    conn = get_conn()
-    conn.execute("UPDATE users SET daily_claim_date=? WHERE user_id=?", (today, u.id))
-    conn.commit()
-    conn.close()
-    add_coins(u.id, DAILY_REWARD, "daily_reward")
-    bal = get_user(u.id)[3]
-    text = box("🎁 DAILY REWARD",
-        f"🎉 Daily Reward Claimed!
-
-🪙 +{DAILY_REWARD} Coins
-💰 Balance : {bal}",
-        "🔥 Come Back Tomorrow!")
-    bot.reply_to(m, text)
-
-# ============================================================
-# /dice
-# ============================================================
-DICE_MAX = 6
-DICE_REWARDS = {1: 10, 2: 20, 3: 30, 4: 40, 5: 50, 6: 100}
-
-@bot.message_handler(commands=["dice"])
-def cmd_dice(m):
-    u = m.from_user
-    create_user_if_missing(u.id, u.username, u.first_name)
-    today = today_ist()
-    row = get_user(u.id)
-    dice_date, rolls_today = row[13], row[12]
-    if dice_date != today:
-        rolls_today = 0
-        conn = get_conn()
-        conn.execute("UPDATE users SET dice_date=?, dice_rolls_today=0 WHERE user_id=?", (today, u.id))
-        conn.commit()
-        conn.close()
-    if rolls_today >= DICE_MAX:
-        bot.reply_to(m, box("⚠️ NO ROLLS LEFT", "🕛 Rolls reset at 12:00 AM IST!"))
-        return
-    result = random.randint(1, 6)
-    reward = DICE_REWARDS[result]
-    rolls_today += 1
-    conn = get_conn()
-    conn.execute("UPDATE users SET dice_rolls_today=? WHERE user_id=?", (rolls_today, u.id))
-    conn.commit()
-    conn.close()
-    add_coins(u.id, reward, "dice_roll")
-    if m.chat.type in ("group", "supergroup"):
-        add_group_stat(m.chat.id, u.id, coins=reward)
-    bal = get_user(u.id)[3]
-    remaining = DICE_MAX - rolls_today
-    if result == 6:
-        text = box("⚡ STRIKE ⚡",
-            f"🎲 Roll Result : 6️⃣
-
-💥 STRIKE!
-
-🪙 Reward : +{reward} Coins
-💰 Balance : {bal}",
-            f"🎯 Rolls Left : {remaining}/{DICE_MAX}")
-    else:
-        text = box("🎲 DICE ROLL",
-            f"🎲 Roll Result : {result}️⃣
-
-🪙 Reward : +{reward} Coins
-💰 Balance : {bal}",
-            f"🎯 Rolls Left : {remaining}/{DICE_MAX}")
-    bot.reply_to(m, text)
-
-# ============================================================
-# /profile
+# /profile (UPDATED WITH VIP)
 # ============================================================
 def profile_text(row):
     user_id, username, first_name, coins, xp, level, rank_, games_played, wins, losses = row[:10]
     total = wins + losses
     winrate = round((wins / total) * 100, 1) if total else 0.0
     uname = f"@{username}" if username else "N/A"
+    
+    # Check VIP status
+    is_vip = check_vip(user_id)
+    vip_badge = " 👑 VIP" if is_vip else ""
+    
     return box("👤 PROFILE",
-        f"👤 Name : {first_name}
-🆔 User ID : {user_id}
-👤 Username : {uname}
-
-"
-        f"⭐ XP : {xp}
-📈 Level : {level}
-🥇 Rank : {rank_}
-
-"
-        f"🪙 Coins : {coins}
-🎮 Games Played : {games_played}
-"
-        f"🏆 Wins : {wins}
-💔 Losses : {losses}
-📊 Win Rate : {winrate}%")
+        f"👤 Name : {first_name}{vip_badge}\n"
+        f"🆔 User ID : {user_id}\n"
+        f"👤 Username : {uname}\n\n"
+        f"⭐ XP : {xp}\n"
+        f"📈 Level : {level}\n"
+        f"🥇 Rank : {rank_}\n\n"
+        f"🪙 Coins : {coins}\n"
+        f"🎮 Games Played : {games_played}\n"
+        f"🏆 Wins : {wins}\n"
+        f"💔 Losses : {losses}\n"
+        f"📊 Win Rate : {winrate}%")
 
 @bot.message_handler(commands=["profile"])
 def cmd_profile(m):
@@ -488,6 +675,10 @@ def cmd_rank(m):
     xp, level, rank_ = row[4], row[5], row[6]
     next_xp = xp_for_level(level + 1)
     to_next = next_xp - xp
+    
+    is_vip = check_vip(u.id)
+    vip_badge = " 👑 VIP" if is_vip else ""
+    
     conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM users WHERE xp > ?", (xp,))
@@ -498,17 +689,14 @@ def cmd_rank(m):
                    (m.chat.id, m.chat.id, u.id))
         group_pos = c.fetchone()[0] + 1
     conn.close()
+    
     text = box("🏆 YOUR RANK",
-        f"👤 {u.first_name}
-
-⭐ Level : {level}
-📈 XP : {xp} / {next_xp}
-
-🥇 Rank : {rank_}
-
-"
-        f"🌎 Global : #{global_pos}
-👥 This Group : #{group_pos}",
+        f"👤 {u.first_name}{vip_badge}\n\n"
+        f"⭐ Level : {level}\n"
+        f"📈 XP : {xp} / {next_xp}\n\n"
+        f"🥇 Rank : {rank_}\n\n"
+        f"🌎 Global : #{global_pos}\n"
+        f"👥 This Group : #{group_pos}",
         f"🔥 {to_next} XP to Level {level+1}")
     bot.reply_to(m, text)
 
@@ -530,19 +718,22 @@ def build_leaderboard(scope, metric, group_id=None):
     c = conn.cursor()
     if scope == "global":
         col = {"xp": "xp", "coins": "coins", "wins": "wins"}[metric]
-        c.execute(f"SELECT first_name, {col} FROM users ORDER BY {col} DESC LIMIT 10")
+        c.execute(f"SELECT first_name, {col}, is_vip FROM users ORDER BY {col} DESC LIMIT 10")
         rows = c.fetchall()
     else:
         col = {"xp": "xp", "coins": "coins", "wins": "wins"}[metric]
-        c.execute(f"""SELECT u.first_name, g.{col} FROM group_stats g JOIN users u ON u.user_id=g.user_id
+        c.execute(f"""SELECT u.first_name, g.{col}, u.is_vip FROM group_stats g 
+                      JOIN users u ON u.user_id=g.user_id
                       WHERE g.group_id=? ORDER BY g.{col} DESC LIMIT 10""", (group_id,))
         rows = c.fetchall()
     conn.close()
     if not rows:
         return "No data yet."
-    lines = [f"{i+1}. {name} — {val}" for i, (name, val) in enumerate(rows)]
-    return "
-".join(lines)
+    lines = []
+    for i, (name, val, is_vip) in enumerate(rows):
+        vip = "👑 " if is_vip else ""
+        lines.append(f"{i+1}. {vip}{name} — {val}")
+    return "\n".join(lines)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lb_"))
 def cb_leaderboard(call):
@@ -563,7 +754,7 @@ def cb_leaderboard(call):
     bot.edit_message_text(box(title, body), call.message.chat.id, call.message.message_id)
 
 # ============================================================
-# /help + /guide
+# /help + /guide (UPDATED WITH VIP)
 # ============================================================
 HELP_TEXT = box("📖 HELP MENU", "Choose a category below 👇")
 
@@ -574,29 +765,36 @@ def cmd_help(m):
             types.InlineKeyboardButton("🪙 ECONOMY", callback_data="help_economy"))
     kb.add(types.InlineKeyboardButton("👤 PROFILE", callback_data="help_profile"),
             types.InlineKeyboardButton("🎁 REWARDS", callback_data="help_rewards"))
-    kb.add(types.InlineKeyboardButton("📖 GUIDE", callback_data="help_guide"))
+    kb.add(types.InlineKeyboardButton("👑 VIP", callback_data="help_vip"),
+            types.InlineKeyboardButton("📖 GUIDE", callback_data="help_guide"))
     bot.reply_to(m, HELP_TEXT, reply_markup=kb)
 
 HELP_SECTIONS = {
     "help_games": box("🎮 GAME COMMANDS",
-        "/ttt <bet> — Tic Tac Toe PvP
-/rps <bet> — Rock Paper Scissors PvP
-"
+        "/ttt <bet> — Tic Tac Toe PvP\n"
+        "/rps <bet> — Rock Paper Scissors PvP\n"
         "DM practice vs bot also available (no rewards)"),
     "help_economy": box("🪙 ECONOMY COMMANDS",
-        "/daily — Claim 250 Coins (DM only)
-/dice — Roll dice, earn Coins (6/day)
-"
+        "/daily — Claim 250 Coins (DM only)\n"
+        "/dice — Roll dice, earn Coins (6/day)\n"
         "Min PvP bet : 50 Coins"),
     "help_profile": box("👤 PROFILE & RANKING",
-        "/profile — View your profile
-/rank — View level, XP, rank & position
-"
+        "/profile — View your profile\n"
+        "/rank — View level, XP, rank & position\n"
         "/leaderboard — Global/Group leaderboards"),
     "help_rewards": box("🎁 REWARD COMMANDS",
-        "/daily — 250 Coins/day
-/dice — up to 600 Coins/day
-Must join Support Channel & Group"),
+        "/daily — 250 Coins/day\n"
+        "/dice — up to 600 Coins/day\n"
+        "Must join Support Channel & Group"),
+    "help_vip": box("👑 VIP COMMANDS",
+        "/vip — View VIP status and purchase\n\n"
+        "💎 VIP Benefits:\n"
+        "• 2x Daily Rewards\n"
+        "• Extra Dice Rolls (+4/day)\n"
+        "• Exclusive Games Access\n"
+        "• Special VIP Badge\n"
+        "• Priority Support\n\n"
+        "💰 Plans: Weekly: 2,000 | Monthly: 7,000 | Yearly: 75,000")
 }
 
 @bot.callback_query_handler(func=lambda call: call.data in HELP_SECTIONS)
@@ -609,19 +807,26 @@ GUIDE_TEXT = box("📖 COMMAND GUIDE", """
 
 /help — Shows command categories.
 
-/daily — DM only. +250 Coins once/day. Reset 12AM IST. Needs Support Channel + Group joined.
+/daily — DM only. +250 Coins once/day (500 for VIP). 
+       Reset 12AM IST. Needs Support Channel + Group joined.
 
-/dice — Roll dice up to 6x/day. Rewards 10-100 Coins. Reset 12AM IST.
+/dice — Roll dice up to 6x/day (10x for VIP). 
+       Rewards 10-100 Coins. Reset 12AM IST.
 
-/profile [@user] — View your or another user's stats. Works in DM & groups.
+/profile [@user] — View your or another user's stats. 
+       Works in DM & groups.
 
 /rank — Shows Level, XP, Rank, Global & Group position.
 
 /leaderboard — Global/Group leaderboards by XP, Coins, Wins.
 
-/ttt <bet> — Tic Tac Toe PvP. Min bet 50 Coins. Winner gets 95% of pool.
+/vip — View VIP status, benefits, and purchase plans.
 
-/rps <bet> — Rock Paper Scissors PvP. Same betting rules as TTT.
+/ttt <bet> — Tic Tac Toe PvP. Min bet 50 Coins. 
+       Winner gets 95% of pool.
+
+/rps <bet> — Rock Paper Scissors PvP. 
+       Same betting rules as TTT.
 
 ⚠️ DM practice games vs bot give NO coins/XP/stats.
 """)
@@ -655,13 +860,11 @@ def cb_menu(call):
         cmd_daily(fake_msg)
     elif action == "menu_help":
         cmd_help(fake_msg)
+    elif action == "menu_vip":
+        cmd_vip(fake_msg)
     elif action == "menu_games":
         bot.send_message(call.message.chat.id, box("🎮 GAMES",
-            "Use in a group:
-/ttt <bet>
-/rps <bet>
-
-Or message me in DM for free practice!"))
+            "Use in a group:\n/ttt <bet>\n/rps <bet>\n\nOr message me in DM for free practice!"))
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_join")
 def cb_check_join(call):
@@ -671,7 +874,7 @@ def cb_check_join(call):
         bot.answer_callback_query(call.id, "❌ Please join both first.", show_alert=True)
 
 # ============================================================
-# OWNER PANEL
+# OWNER PANEL (UPDATED WITH VIP)
 # ============================================================
 def is_owner(user_id):
     return user_id == OWNER_ID
@@ -687,7 +890,8 @@ def cmd_panel(m):
             types.InlineKeyboardButton("🎮 GAMES", callback_data="panel_games"))
     kb.add(types.InlineKeyboardButton("📊 STATS", callback_data="panel_stats"),
             types.InlineKeyboardButton("📢 BROADCAST", callback_data="panel_broadcast"))
-    kb.add(types.InlineKeyboardButton("⚙️ SETTINGS", callback_data="panel_settings"))
+    kb.add(types.InlineKeyboardButton("👑 VIP MGMT", callback_data="panel_vip"),
+            types.InlineKeyboardButton("⚙️ SETTINGS", callback_data="panel_settings"))
     bot.send_message(m.chat.id, box("👑 OWNER PANEL", "Manage Zynox Gaming below 👇"), reply_markup=kb)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("panel_"))
@@ -698,9 +902,12 @@ def cb_panel(call):
     bot.answer_callback_query(call.id)
     conn = get_conn()
     c = conn.cursor()
+    
     if call.data == "panel_users":
         c.execute("SELECT COUNT(*) FROM users")
-        body = f"👥 Total Users : {c.fetchone()[0]}"
+        c.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+        vip_count = c.fetchone()[0]
+        body = f"👥 Total Users : {c.fetchone()[0]}\n👑 VIP Users : {vip_count}"
     elif call.data == "panel_groups":
         c.execute("SELECT COUNT(*) FROM groups")
         body = f"👥 Total Groups : {c.fetchone()[0]}"
@@ -712,12 +919,20 @@ def cb_panel(call):
     elif call.data == "panel_stats":
         c.execute("SELECT SUM(coins), SUM(xp) FROM users")
         s = c.fetchone()
-        body = f"🪙 Total Coins In Circulation : {s[0] or 0}
-⭐ Total XP : {s[1] or 0}"
+        body = f"🪙 Total Coins In Circulation : {s[0] or 0}\n⭐ Total XP : {s[1] or 0}"
     elif call.data == "panel_broadcast":
         body = "📢 Send: /broadcast <message>"
+    elif call.data == "panel_vip":
+        c.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+        vip_count = c.fetchone()[0]
+        c.execute("SELECT user_id, username, vip_expiry FROM users WHERE is_vip=1 ORDER BY vip_expiry ASC LIMIT 10")
+        vip_users = c.fetchall()
+        body = f"👑 VIP Users: {vip_count}\n\n"
+        for uid, uname, expiry in vip_users:
+            body += f"• {uname or uid} — Expires: {expiry[:10]}\n"
     else:
         body = "⚙️ Settings coming soon."
+    
     conn.close()
     bot.edit_message_text(box("👑 OWNER PANEL", body), call.message.chat.id, call.message.message_id)
 
@@ -748,6 +963,49 @@ def cmd_wallet(m):
     if m.chat.type != "private" or not is_owner(m.from_user.id):
         return
     bot.reply_to(m, box("🏦 BOT WALLET", f"💰 Balance : {wallet_balance()} Coins"))
+
+# VIP Management for Owner
+@bot.message_handler(commands=["vipgive"])
+def cmd_vipgive(m):
+    if m.chat.type != "private" or not is_owner(m.from_user.id):
+        return
+    parts = m.text.split()
+    if len(parts) != 4:
+        bot.reply_to(m, "Usage: /vipgive @username|user_id plan days\nPlans: weekly, monthly, yearly")
+        return
+    
+    target = resolve_user(parts[1])
+    plan = parts[2].lower()
+    if plan not in VIP_BENEFITS:
+        bot.reply_to(m, "❌ Invalid plan. Use: weekly, monthly, yearly")
+        return
+    
+    try:
+        days = int(parts[3])
+        if days <= 0:
+            raise ValueError
+    except ValueError:
+        bot.reply_to(m, "❌ Invalid days. Must be positive number.")
+        return
+    
+    if target is None:
+        bot.reply_to(m, "❌ User not found.")
+        return
+    
+    activate_vip(target, plan)
+    # Update expiry to add extra days
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT vip_expiry FROM users WHERE user_id=?", (target,))
+    row = c.fetchone()
+    if row and row[0]:
+        expiry = datetime.fromisoformat(row[0])
+        new_expiry = expiry + timedelta(days=days)
+        c.execute("UPDATE users SET vip_expiry=? WHERE user_id=?", (new_expiry.isoformat(), target))
+    conn.commit()
+    conn.close()
+    
+    bot.reply_to(m, box("👑 VIP GIVEN", f"✅ VIP {plan} given to {parts[1]}\n📅 Extra {days} days added."))
 
 def resolve_user(identifier):
     identifier = identifier.strip()
@@ -833,8 +1091,8 @@ def parse_bet(m):
 def settle_match(game, winner_id, loser_id, draw=False, group_id=None):
     pool = game["bet"] * 2
     if draw:
-        add_coins(game["host_id"], game["bet"], "ttt_refund")
-        add_coins(game["p2_id"], game["bet"], "ttt_refund")
+        add_coins(game["host_id"], game["bet"], "game_refund")
+        add_coins(game["p2_id"], game["bet"], "game_refund")
         add_xp(game["host_id"], 20)
         add_xp(game["p2_id"], 20)
         conn = get_conn()
@@ -886,13 +1144,11 @@ def cmd_ttt(m):
     u = m.from_user
     create_user_if_missing(u.id, u.username, u.first_name)
     if m.chat.type == "private":
-        bot.reply_to(m, box("🎮 PRACTICE MODE", "DM practice not enabled in this build.
-Use /ttt in a group for real PvP!"))
+        bot.reply_to(m, box("🎮 PRACTICE MODE", "DM practice not enabled in this build.\nUse /ttt in a group for real PvP!"))
         return
     bet = parse_bet(m)
     if bet is None:
-        bot.reply_to(m, f"❌ Usage: /ttt <bet>
-Minimum bet: {MIN_BET} Coins")
+        bot.reply_to(m, f"❌ Usage: /ttt <bet>\nMinimum bet: {MIN_BET} Coins")
         return
     row = get_user(u.id)
     if row[3] < bet:
@@ -904,11 +1160,7 @@ Minimum bet: {MIN_BET} Coins")
         return
     uname = f"@{u.username}" if u.username else u.first_name
     text = box("🎮 TIC TAC TOE",
-        f"👤 Host : {uname}
-
-🪙 Entry : {bet} Coins
-🏆 Prize Pool : {bet*2} Coins
-🏦 Fee : 5%",
+        f"👤 Host : {uname}\n\n🪙 Entry : {bet} Coins\n🏆 Prize Pool : {bet*2} Coins\n🏦 Fee : 5%",
         "⚡ Waiting for Player 2")
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🎮 JOIN GAME", callback_data=f"ttt_join_{u.id}_{bet}"))
@@ -945,8 +1197,7 @@ def cb_ttt_join(call):
     game_id = f"{key[0]}_{key[1]}"
     active_games[game_id] = {"host_id": host_id, "p2_id": p2.id, "bet": bet, "board": [0]*9,
                                "turn": host_id, "group_id": call.message.chat.id}
-    bot.edit_message_text(box("🎮 TIC TAC TOE", "⚡ Game Started!
-❌ Host  vs  ⭕ Player 2"),
+    bot.edit_message_text(box("🎮 TIC TAC TOE", "⚡ Game Started!\n❌ Host  vs  ⭕ Player 2"),
                             key[0], key[1], reply_markup=ttt_board_kb([0]*9, game_id))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ttt_move_"))
@@ -970,8 +1221,7 @@ def cb_ttt_move(call):
     if result == 0:
         game["turn"] = game["p2_id"] if game["turn"] == game["host_id"] else game["host_id"]
         bot.answer_callback_query(call.id)
-        bot.edit_message_text(box("🎮 TIC TAC TOE", "❌ Host  vs  ⭕ Player 2
-Game in progress..."),
+        bot.edit_message_text(box("🎮 TIC TAC TOE", "❌ Host  vs  ⭕ Player 2\nGame in progress..."),
                                 chat_id, msg_id, reply_markup=ttt_board_kb(game["board"], game_id))
     else:
         bot.answer_callback_query(call.id)
@@ -982,8 +1232,7 @@ Game in progress..."),
             winner_id = game["host_id"] if result == 1 else game["p2_id"]
             loser_id = game["p2_id"] if result == 1 else game["host_id"]
             payout, fee = settle_match(game, winner_id, loser_id, group_id=game["group_id"])
-            outcome = f"🏆 Winner gets {payout} Coins!
-🏦 Fee : {fee} Coins"
+            outcome = f"🏆 Winner gets {payout} Coins!\n🏦 Fee : {fee} Coins"
         bot.edit_message_text(box("🎮 GAME OVER", outcome), chat_id, msg_id,
                                 reply_markup=ttt_board_kb(game["board"], game_id))
         del active_games[game_id]
@@ -997,13 +1246,11 @@ def cmd_rps(m):
     u = m.from_user
     create_user_if_missing(u.id, u.username, u.first_name)
     if m.chat.type == "private":
-        bot.reply_to(m, box("✊ PRACTICE MODE", "DM practice not enabled in this build.
-Use /rps in a group for real PvP!"))
+        bot.reply_to(m, box("✊ PRACTICE MODE", "DM practice not enabled in this build.\nUse /rps in a group for real PvP!"))
         return
     bet = parse_bet(m)
     if bet is None:
-        bot.reply_to(m, f"❌ Usage: /rps <bet>
-Minimum bet: {MIN_BET} Coins")
+        bot.reply_to(m, f"❌ Usage: /rps <bet>\nMinimum bet: {MIN_BET} Coins")
         return
     row = get_user(u.id)
     if row[3] < bet:
@@ -1015,11 +1262,7 @@ Minimum bet: {MIN_BET} Coins")
         return
     uname = f"@{u.username}" if u.username else u.first_name
     text = box("✊ RPS BATTLE",
-        f"👤 Host : {uname}
-
-🪙 Entry : {bet} Coins
-🏆 Prize Pool : {bet*2} Coins
-🏦 Fee : 5%",
+        f"👤 Host : {uname}\n\n🪙 Entry : {bet} Coins\n🏆 Prize Pool : {bet*2} Coins\n🏦 Fee : 5%",
         "⚡ Waiting for Player 2")
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🎮 JOIN GAME", callback_data=f"rps_join_{u.id}_{bet}"))
@@ -1085,12 +1328,10 @@ def cb_rps_pick(call):
         outcome = f"🤝 Both picked {RPS_CHOICES[c1]} — DRAW! Bets refunded."
     elif RPS_BEATS[c1] == c2:
         payout, fee = settle_match(game, game["host_id"], game["p2_id"], group_id=game["group_id"])
-        outcome = f"🏆 Host wins with {RPS_CHOICES[c1]} vs {RPS_CHOICES[c2]}!
-🪙 Payout : {payout} | 🏦 Fee : {fee}"
+        outcome = f"🏆 Host wins with {RPS_CHOICES[c1]} vs {RPS_CHOICES[c2]}!\n🪙 Payout : {payout} | 🏦 Fee : {fee}"
     else:
         payout, fee = settle_match(game, game["p2_id"], game["host_id"], group_id=game["group_id"])
-        outcome = f"🏆 Player 2 wins with {RPS_CHOICES[c2]} vs {RPS_CHOICES[c1]}!
-🪙 Payout : {payout} | 🏦 Fee : {fee}"
+        outcome = f"🏆 Player 2 wins with {RPS_CHOICES[c2]} vs {RPS_CHOICES[c1]}!\n🪙 Payout : {payout} | 🏦 Fee : {fee}"
     bot.edit_message_text(box("✊ RESULT", outcome), chat_id, msg_id)
     del active_games[game_id]
 
@@ -1100,4 +1341,6 @@ def cb_rps_pick(call):
 if __name__ == "__main__":
     init_db()
     print("🎮 Zynox Gaming Bot is starting...")
+    print("👑 VIP System Activated!")
+    print("💎 Commands: /vip, /vipgive (owner only)")
     bot.infinity_polling(skip_pending=True)
